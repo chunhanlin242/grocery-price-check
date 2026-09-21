@@ -1,0 +1,47 @@
+name = "price-check"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+workers_dev = false
+
+routes = [
+  { pattern = "price.example.com", custom_domain = true }
+]
+
+# Worker 先跑，由它決定走 API 還是回靜態檔（含 SPA fallback）
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = true
+# 沒對應檔案的路徑一律回 app shell（200，不是轉址）。
+# 自己在 Worker 裡判斷 404 行不通：資產伺服器對 /compare 這種路徑會先回 307
+# 試 /compare/，根本走不到 404 那個分支。
+not_found_handling = "single-page-application"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "price-check"
+database_id = "YOUR_D1_DATABASE_ID"
+
+# 貨架標籤照片。
+#
+# 目前這個帳號還沒開通 R2，所以先關掉。沒有這個 binding 的時候：
+#   - 拍照、AI 辨識、記價全部照常（辨識是把圖片直接送進 /api/extract，不經過 R2）
+#   - 照片留在拍照那台裝置的 IndexedDB 裡，換裝置看不到原圖
+#   - Worker 的照片端點回 501，客戶端收到 501 就不再重試（見 db.js uploadPendingPhotos）
+#
+# 之後在 Cloudflare Dashboard 開通 R2 後，跑
+#   npx wrangler r2 bucket create price-check-photos
+# 再把下面三行的註解拿掉重新 deploy 即可。已經記過的照片會自動補傳上去。
+# [[r2_buckets]]
+# binding = "PHOTOS"
+# bucket_name = "price-check-photos"
+
+# 標籤辨識。免費額度 10,000 Neurons/日。
+[ai]
+binding = "AI"
+
+# 每天 01:30 UTC 更新 GBP→TWD 匯率。
+# 沒有這個 cron 也不會壞：當天沒資料時 Worker 會自己即時抓一次，
+# cron 只是讓第一個打開 App 的人不必等那一下。
+[triggers]
+crons = ["30 1 * * *"]

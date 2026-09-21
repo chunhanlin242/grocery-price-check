@@ -1,0 +1,13 @@
+{
+  "name": "price-check",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 execute price-check --local --file=./schema.sql",
+    "db:remote": "wrangler d1 execute price-check --remote --file=./schema.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}

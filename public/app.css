@@ -1,0 +1,662 @@
+/* 極簡黑白 + 蜜柑橘。淺色為主，深色自動跟隨系統。
+   跟 travel-money 同一套視覺語言，因為是同一個人的同一組工具。 */
+
+:root {
+  --bg:        #ffffff;
+  --surface:   #ffffff;
+  --raised:    #fafafa;
+  --text:      #111111;
+  --muted:     #737373;
+  --faint:     #a3a3a3;
+  --line:      #e5e5e5;
+  --line-soft: #f0f0f0;
+
+  --accent:      #e8590c;
+  /* 白字壓在橘底上時專用的深一階橘。
+     #e8590c 配白字對比只有 3.58，小字級過不了 WCAG AA；#cc4d0a 是 4.53。 */
+  --accent-ink:  #cc4d0a;
+  --accent-weak: #fff1e9;
+  --danger:      #d4351c;
+  --danger-weak: #fdeceb;
+  --ok:          #00875a;
+  --ok-weak:     #e6f4ee;
+
+  --r: 10px;
+  --tap: 48px;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:        #0a0a0a;
+    --surface:   #0a0a0a;
+    --raised:    #171717;
+    --text:      #fafafa;
+    --muted:     #a3a3a3;
+    --faint:     #6b6b6b;
+    --line:      #262626;
+    --line-soft: #1c1c1c;
+    --accent-weak: #2a1408;
+    --danger-weak: #2a0f0d;
+    --ok-weak:     #0c221a;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg:        #0a0a0a;
+  --surface:   #0a0a0a;
+  --raised:    #171717;
+  --text:      #fafafa;
+  --muted:     #a3a3a3;
+  --faint:     #6b6b6b;
+  --line:      #262626;
+  --line-soft: #1c1c1c;
+  --accent-weak: #2a1408;
+  --danger-weak: #2a0f0d;
+  --ok-weak:     #0c221a;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body { margin: 0; height: 100%; overscroll-behavior-y: none; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input, select, textarea { font: inherit; color: inherit; }
+button { background: none; border: 0; cursor: pointer; padding: 0; }
+
+.num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+.hidden { display: none !important; }
+
+/* ---------------------------------------------------------------- 中英並列
+   中文負責「這是什麼」，英文負責「在店裡怎麼找」。英文永遠是小一號的配角，
+   不然兩種文字打架，整個畫面會變成一團字。 */
+
+.bi { display: inline-flex; flex-direction: column; line-height: 1.22; vertical-align: middle; }
+.bi > b { font-weight: inherit; }
+.bi > i { font-style: normal; font-size: 0.72em; color: var(--faint); letter-spacing: 0.01em; }
+
+i.en {
+  font-style: normal;
+  font-size: 0.8em;
+  color: var(--faint);
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
+
+/* ---------------------------------------------------------------- 版面 */
+
+#app { min-height: 100%; display: flex; flex-direction: column; }
+
+.screen {
+  flex: 1;
+  padding-bottom: calc(84px + var(--safe-b));
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.topbar { position: sticky; top: 0; z-index: 20; background: var(--bg); border-bottom: 1px solid var(--line-soft); }
+.topbar-inner {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 18px 10px;
+  max-width: 720px; margin: 0 auto;
+}
+.topbar h1 { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -0.01em; }
+.topbar h1 .bi > i { font-size: 0.6em; }
+.topbar .spacer { flex: 1; }
+
+.sync-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ok); flex: none; transition: background .2s;
+}
+.sync-dot[data-state="syncing"] { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+.sync-dot[data-state="offline"] { background: var(--faint); }
+.sync-dot[data-state="error"],
+.sync-dot[data-state="unauthed"] { background: var(--danger); }
+@keyframes pulse { 50% { opacity: .3; } }
+.sync-label { font-size: 12px; color: var(--muted); }
+
+.icon-btn {
+  flex: none; width: 44px; height: 44px; margin: -10px 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; line-height: 1; border-radius: 8px;
+}
+.icon-btn:active { background: var(--raised); }
+
+/* ---------------------------------------------------------------- 底部列 */
+
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  padding-bottom: var(--safe-b);
+  background: var(--bg); border-top: 1px solid var(--line);
+}
+.tabbar-inner {
+  display: grid; grid-template-columns: 1fr 1fr 88px 1fr 1fr;
+  align-items: center; max-width: 720px; margin: 0 auto;
+}
+.tab {
+  height: 66px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  color: var(--muted);
+}
+.tab .ic { font-size: 18px; line-height: 1; }
+.tab .nm { font-size: 11px; line-height: 1.15; }
+.tab .en { font-size: 9px; line-height: 1.15; }
+.tab[aria-current="page"] { color: var(--text); }
+.tab[aria-current="page"] .nm { font-weight: 650; }
+
+.fab-slot { display: flex; justify-content: center; }
+.fab {
+  width: 62px; height: 62px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  margin-top: -20px;
+  box-shadow: 0 4px 14px rgba(232, 89, 12, .35);
+}
+.fab .ic { font-size: 21px; line-height: 1; }
+.fab .nm { font-size: 10px; font-weight: 650; letter-spacing: .02em; }
+.fab:active { transform: scale(.94); }
+
+/* ---------------------------------------------------------------- 區塊標題 */
+
+.section-head { display: flex; align-items: center; gap: 10px; padding: 20px 18px 8px; }
+.section-head h2 {
+  margin: 0; font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: .03em;
+}
+.section-head h2 .en { font-size: 11px; }
+.section-head .more { margin-left: auto; font-size: 13px; color: var(--accent-ink); }
+
+.note { padding: 12px 18px 24px; font-size: 12px; color: var(--faint); line-height: 1.75; }
+.note b { color: var(--muted); font-weight: 600; }
+
+.empty { padding: 56px 26px; text-align: center; color: var(--faint); }
+.empty .big { font-size: 32px; margin-bottom: 10px; }
+.empty p { margin: 0; font-size: 14px; line-height: 1.8; }
+
+/* ---------------------------------------------------------------- 搜尋列 */
+
+.searchbar { padding: 10px 18px 12px; border-bottom: 1px solid var(--line-soft); }
+.searchbar input {
+  width: 100%; height: 44px; padding: 0 14px;
+  border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--raised); font-size: 16px;
+}
+.searchbar input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+
+/* ---------------------------------------------------------------- 品項列 */
+
+/* 一列裡有兩個按鈕：左邊圈圈是「加進整籃」，其餘是「看這一樣哪家便宜」。
+   按鈕不能巢狀，所以不是一個大 button。 */
+.itemrow {
+  display: flex; align-items: stretch;
+  width: 100%;
+  border-bottom: 1px solid var(--line-soft);
+  min-height: 62px;
+}
+.itemrow .open {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 13px;
+  text-align: left; padding: 12px 18px 12px 4px;
+  color: inherit; font: inherit;
+}
+.itemrow .open:active { background: var(--raised); }
+
+.itemrow .pick {
+  flex: none; width: 48px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--faint); font-size: 15px; font-weight: 700;
+}
+.itemrow .pick::before {
+  content: ""; position: absolute;
+  width: 24px; height: 24px; border-radius: 50%;
+  border: 1.5px solid var(--line);
+}
+.itemrow .pick { position: relative; }
+.itemrow.picked .pick { color: #fff; }
+.itemrow.picked .pick::before { background: var(--accent-ink); border-color: var(--accent-ink); }
+.itemrow.picked { background: var(--accent-weak); }
+.itemrow .pick > * { position: relative; }
+
+/* 選單裡的品項列沒有圈圈，整列都是 open */
+.itemrow .open:only-child { padding-left: 18px; }
+.itemrow .ic { font-size: 20px; width: 26px; text-align: center; flex: none; }
+.itemrow .body { flex: 1; min-width: 0; }
+.itemrow .nm { font-size: 15px; font-weight: 550; display: block; }
+.itemrow .nm .en { display: block; font-size: 12px; margin-top: -1px; }
+.itemrow .meta { font-size: 12px; color: var(--faint); margin-top: 2px; display: block; }
+.itemrow .best { text-align: right; flex: none; }
+.itemrow .best .up { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+.itemrow .best .who { font-size: 11px; color: var(--muted); margin-top: 1px; }
+.itemrow.dim .best .up { color: var(--faint); }
+
+/* ---------------------------------------------------------------- 店家卡片
+   這一頁要「一眼看出這家店買什麼划算」，所以最划算的幾樣直接印在卡片上，
+   不是給一個數字叫人點進去 —— 站在店門口滑手機，多按一下就是多一次分心。 */
+
+.storelist { display: flex; flex-direction: column; gap: 10px; padding: 4px 18px 8px; }
+
+.storecard {
+  display: block; width: 100%; text-align: left;
+  color: inherit; font: inherit;
+  border: 1px solid var(--line); border-left: 5px solid var(--c);
+  border-radius: var(--r); background: var(--bg);
+  padding: 12px 14px 10px;
+}
+.storecard:active { background: var(--raised); }
+
+.storecard .sc-head { display: flex; align-items: center; gap: 10px; }
+.storecard .sc-name {
+  font-size: 16px; font-weight: 700; letter-spacing: -0.01em;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.storecard .sc-badge {
+  margin-left: auto; flex: none;
+  padding: 3px 9px; border-radius: 999px;
+  font-size: 11px; font-weight: 700;
+  background: var(--c); color: #fff;
+}
+/* 沒有勝場時不要用店家色喊話，那會讓「沒有」看起來像成就 */
+.storecard .sc-badge.muted { background: var(--line); color: var(--muted); font-weight: 600; }
+
+.storecard .sc-wins { display: block; margin-top: 10px; }
+.storecard .win {
+  display: flex; align-items: center; gap: 9px;
+  padding: 6px 0;
+  border-top: 1px solid var(--line-soft);
+}
+.storecard .win:first-child { border-top: 0; padding-top: 2px; }
+.storecard .win .ic { font-size: 16px; width: 20px; text-align: center; flex: none; }
+.storecard .win .nm {
+  flex: 1; min-width: 0; font-size: 14px; font-weight: 550;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.storecard .win .nm .en { font-size: 11px; }
+.storecard .win .up { flex: none; font-size: 13px; font-weight: 650; }
+.storecard .win .delta { flex: none; }
+
+.storecard .sc-none {
+  display: block; margin-top: 8px;
+  font-size: 12px; color: var(--faint); line-height: 1.6;
+}
+.storecard .sc-none .en { display: block; }
+
+.storecard .sc-foot {
+  display: block; margin-top: 9px; padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 11px; color: var(--faint);
+}
+
+/* 店家明細最上面的三格計分 */
+.scoreline {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  border-bottom: 1px solid var(--line);
+  border-top: 3px solid var(--c);
+  background: var(--raised);
+}
+.scoreline > div { padding: 14px 8px; text-align: center; border-right: 1px solid var(--line-soft); }
+.scoreline > div:last-child { border-right: 0; }
+.scoreline .n { display: block; font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }
+.scoreline .l { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
+.scoreline .l .en { display: block; font-size: 9px; color: var(--faint); }
+
+/* 省多少／貴多少 */
+.delta {
+  display: inline-block; padding: 2px 7px; border-radius: 999px;
+  font-size: 11px; font-weight: 650; letter-spacing: .01em;
+}
+.delta.save { background: var(--ok-weak); color: var(--ok); }
+.delta.over { background: var(--danger-weak); color: var(--danger); }
+.delta.only { background: var(--line); color: var(--muted); font-weight: 600; }
+
+/* ---------------------------------------------------------------- 整籃面板 */
+
+.basket-panel { border-bottom: 1px solid var(--line); background: var(--raised); }
+.basket-panel .rank { background: var(--bg); }
+.basket-panel .section-head { padding-top: 14px; }
+
+.grouphead {
+  padding: 12px 18px 6px;
+  font-size: 12px; font-weight: 600; color: var(--muted);
+}
+.grouphead .en { font-size: 11px; }
+.grouphead .num { float: right; color: var(--faint); font-weight: 400; }
+
+.linkbtn { margin-left: auto; font-size: 13px; color: var(--accent-ink); padding: 6px 4px; min-height: 44px; }
+
+.basket-lines { border-top: 1px solid var(--line-soft); background: var(--bg); }
+.basket-lines summary {
+  padding: 14px 18px; font-size: 13px; color: var(--muted);
+  cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 6px;
+}
+.basket-lines summary::-webkit-details-marker { display: none; }
+.basket-lines summary::before { content: "▸"; color: var(--faint); }
+.basket-lines[open] summary::before { content: "▾"; }
+.basket-lines .rows { border-top: 0; }
+
+/* ---------------------------------------------------------------- 照片檢視器
+   貨架標籤的字很小，96px 縮圖讀不出價格 —— 這是它存在的唯一理由。 */
+
+.sheet.viewer { background: #0b0b0b; color: #fff; }
+.viewer-bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; flex: none;
+  padding-top: calc(10px + env(safe-area-inset-top, 0px));
+}
+.viewer-bar .x { font-size: 24px; width: 48px; height: 48px; color: #fff; }
+.viewer-bar .spacer { flex: 1; }
+.viewer-bar .btn-small { background: rgba(255,255,255,.12); border-color: transparent; color: #fff; }
+
+.viewer-stage {
+  flex: 1; min-height: 0; overflow: auto;
+  display: flex; align-items: center; justify-content: center;
+  -webkit-overflow-scrolling: touch;
+}
+.viewer-stage img { max-width: 100%; max-height: 100%; object-fit: contain; cursor: zoom-in; }
+/* 放大後改成原始尺寸，靠外層捲動平移。align-items 要拿掉，
+   不然圖比容器高的時候上緣會被切掉而且捲不到。 */
+.viewer-stage.zoomed { align-items: flex-start; justify-content: flex-start; }
+.viewer-stage.zoomed img {
+  max-width: none; max-height: none;
+  width: 250%; height: auto; cursor: zoom-out;
+}
+.viewer-hint {
+  margin: 0; padding: 12px 18px calc(16px + var(--safe-b));
+  text-align: center; font-size: 12px; color: rgba(255,255,255,.45); flex: none;
+}
+.viewer-hint .en { color: rgba(255,255,255,.3); }
+
+/* 縮圖上的放大提示 */
+.photo-preview .thumb { position: relative; flex: none; display: block; }
+.photo-preview .thumb-badge {
+  position: absolute; right: 4px; bottom: 4px;
+  background: rgba(0,0,0,.6); color: #fff;
+  border-radius: 6px; padding: 1px 5px; font-size: 11px;
+}
+
+/* ---------------------------------------------------------------- 店家 chip */
+
+/* 一般超市與亞洲超市分兩列。
+   亞洲超市如果排在 12 家英國連鎖後面，每次都要橫捲到底才找得到。 */
+.storegroups { border-bottom: 1px solid var(--line-soft); padding-bottom: 4px; }
+.storegroup + .storegroup { border-top: 1px solid var(--line-soft); padding-top: 2px; }
+.storegroup-label {
+  display: block; padding: 10px 18px 0;
+  font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: .03em;
+}
+.storegroup-label .en { font-size: 10px; }
+.storegroup .storebar { border-bottom: 0; padding-top: 8px; padding-bottom: 10px; }
+
+.storebar {
+  display: flex; gap: 8px; overflow-x: auto; padding: 12px 18px;
+  border-bottom: 1px solid var(--line-soft);
+  scrollbar-width: none;
+}
+.storebar::-webkit-scrollbar { display: none; }
+
+.chip {
+  flex: none;
+  padding: 9px 14px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--raised);
+  font-size: 14px; font-weight: 600; white-space: nowrap;
+  min-height: 44px;
+  display: inline-flex; align-items: center; gap: 7px;
+}
+.chip .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.chip:active { background: var(--accent-weak); }
+.chip.on { background: var(--text); border-color: var(--text); color: var(--bg); }
+
+/* 「＋ 新增店家」：看得到但不搶戲，它不是一個店家 */
+.chip.ghost {
+  border-style: dashed; color: var(--muted);
+  font-size: 18px; font-weight: 400; padding: 0 16px;
+}
+
+/* 圖示挑選：格子要夠大，emoji 在手機上很小 */
+.emoji-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
+  gap: 6px; padding: 4px 14px 10px;
+}
+.emoji-btn {
+  height: 52px; border-radius: 10px;
+  font-size: 26px; line-height: 1;
+  border: 1px solid transparent; background: var(--raised);
+}
+.emoji-btn:active { background: var(--accent-weak); }
+.emoji-btn.on { border-color: var(--accent-ink); background: var(--accent-weak); }
+
+.emoji-now { font-size: 22px; vertical-align: -2px; }
+
+/* 自訂店家的配色選擇 */
+.swatches { display: flex; flex-wrap: wrap; gap: 10px; }
+.swatch-btn {
+  width: 44px; height: 44px; border-radius: 50%;
+  border: 2px solid transparent;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .12);
+}
+.swatch-btn.on {
+  border-color: var(--text);
+  box-shadow: inset 0 0 0 2px var(--bg);
+}
+.chip.on .dot { outline: 1px solid var(--bg); }
+
+/* ---------------------------------------------------------------- 比價排行 */
+
+.rank { border-bottom: 1px solid var(--line-soft); }
+/* 品項明細裡的排行列是 <button>（點了可以編輯那筆價格），
+   籃子頁的是 <div>（沒有單一筆價格可編）。兩者共用同一套樣式。 */
+.rankrow {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; text-align: left;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line-soft);
+  color: inherit; font: inherit;
+}
+button.rankrow:active { background: var(--raised); }
+button.rankrow.best:active { background: var(--ok-weak); filter: brightness(.97); }
+.rankrow:last-child { border-bottom: 0; }
+.rankrow .swatch { width: 4px; align-self: stretch; border-radius: 2px; flex: none; min-height: 34px; }
+.rankrow .body { flex: 1; min-width: 0; }
+.rankrow .store { font-size: 15px; font-weight: 600; }
+.rankrow .detail { font-size: 12px; color: var(--faint); margin-top: 1px; }
+.rankrow .fig { text-align: right; flex: none; }
+.rankrow .fig .a { font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
+.rankrow .fig .b { font-size: 12px; color: var(--muted); margin-top: 1px; }
+.rankrow.best { background: var(--ok-weak); }
+.rankrow.best .fig .a { color: var(--ok); }
+.rankrow.stale .fig .a,
+.rankrow.stale .store { color: var(--faint); }
+
+.tag {
+  display: inline-block; margin-left: 6px;
+  padding: 1px 6px; border-radius: 4px;
+  font-size: 10px; font-weight: 650; letter-spacing: .02em;
+  vertical-align: 1px;
+}
+.tag.promo { background: var(--accent-weak); color: var(--accent-ink); }
+.tag.old   { background: var(--line); color: var(--muted); }
+.tag.win   { background: var(--ok); color: #fff; }
+
+/* ---------------------------------------------------------------- 面板 / 表單 */
+
+.sheet {
+  position: fixed; inset: 0; z-index: 100;
+  background: var(--bg);
+  display: flex; flex-direction: column;
+  animation: slideUp .18s ease-out;
+}
+@keyframes slideUp { from { transform: translateY(100%); } }
+
+.sheet-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; border-bottom: 1px solid var(--line-soft); flex: none;
+}
+.sheet-head .x { font-size: 24px; width: var(--tap); height: var(--tap); color: var(--muted); }
+.sheet-head h2 { margin: 0; font-size: 16px; font-weight: 650; }
+.sheet-head .spacer { flex: 1; }
+.sheet-head .go {
+  padding: 9px 16px; border-radius: 999px;
+  background: var(--accent-ink); color: #fff; font-size: 14px; font-weight: 650;
+  min-height: 44px;
+}
+.sheet-head .go[disabled] { background: var(--line); color: var(--faint); }
+.sheet-body { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: calc(28px + var(--safe-b)); }
+
+.rows { border-top: 1px solid var(--line); }
+.row {
+  display: flex; align-items: center; gap: 14px;
+  width: 100%; text-align: left;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--line-soft);
+  min-height: var(--tap);
+}
+.row:active { background: var(--raised); }
+.row .k { font-size: 15px; flex: none; }
+.row .v { margin-left: auto; font-size: 14px; color: var(--muted); text-align: right; }
+.row.danger .k { color: var(--danger); }
+.row.block { display: block; }
+
+.row .inp, .row .sel {
+  border: 0; background: none; font-size: 15px; color: var(--text);
+  text-align: right; margin-left: auto; max-width: 62%;
+  padding: 6px 0; min-height: 34px;
+}
+.row .inp.grow { flex: 1; max-width: none; }
+.row .inp.qty {
+  min-height: 44px; text-align: center; padding: 0 8px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--raised);
+}
+.row .sel {
+  appearance: none; padding-right: 14px;
+  background: linear-gradient(45deg, transparent 50%, var(--muted) 50%) calc(100% - 5px) 52% / 5px 5px no-repeat;
+}
+.row .inp:focus, .row .sel:focus { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.row .inp::placeholder { color: var(--faint); }
+.row .chk { margin-left: auto; width: 22px; height: 22px; accent-color: var(--accent); flex: none; }
+
+/* 價格是這個 App 唯一該喊出來的數字 */
+.price-area { padding: 22px 20px 18px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; }
+.price-area .cur { font-size: 34px; font-weight: 700; color: var(--faint); flex: none; }
+.price-area .big-input {
+  flex: 1; min-width: 0;
+  border: 0; background: none; padding: 2px 0;
+  font-size: 44px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.1;
+  color: var(--accent); text-align: right;
+}
+.price-area .big-input::placeholder { color: var(--faint); }
+.price-area .big-input:focus { outline: 0; border-bottom: 2px solid var(--accent); }
+.price-area .big-input::-webkit-outer-spin-button,
+.price-area .big-input::-webkit-inner-spin-button { appearance: none; margin: 0; }
+.unit-hint { padding: 8px 20px 0; font-size: 13px; color: var(--muted); text-align: right; min-height: 24px; }
+
+/* ---------------------------------------------------------------- 照片 */
+
+.photo-slot { padding: 14px 18px; border-bottom: 1px solid var(--line-soft); }
+
+/* 兩個來源並排：拍新的 vs 用已經拍好的。
+   後者是主要用途 —— 大部分人是先在店裡拍一疊，回家再慢慢輸入。 */
+.photo-sources { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.photo-drop {
+  width: 100%; min-height: 92px;
+  border: 1px dashed var(--line); border-radius: var(--r);
+  background: var(--raised);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  color: var(--muted); font-size: 13px; text-align: center; padding: 8px;
+}
+.photo-drop .ic { font-size: 24px; line-height: 1; }
+.photo-drop:active { background: var(--accent-weak); }
+
+.batch-link { width: 100%; margin-top: 10px; }
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.photo-preview { display: flex; gap: 12px; align-items: flex-start; }
+.photo-preview img {
+  width: 96px; height: 96px; object-fit: cover;
+  border-radius: var(--r); border: 1px solid var(--line); flex: none;
+}
+.photo-preview .side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.btn-small {
+  padding: 8px 14px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--raised);
+  font-size: 13px; font-weight: 600; min-height: 44px;
+}
+.btn-small.primary { background: var(--accent-ink); border-color: var(--accent-ink); color: #fff; }
+.btn-small[disabled] { opacity: .5; }
+.ai-note { font-size: 12px; color: var(--faint); line-height: 1.6; }
+.ai-note.warn { color: var(--danger); }
+
+/* ---------------------------------------------------------------- 走勢圖
+   資料是唯一能大聲的東西：格線與座標軸壓到幾乎看不見。 */
+
+.chart { margin: 0; padding: 6px 18px 4px; }
+.chart-svg { display: block; width: 100%; height: 150px; overflow: visible; }
+.chart .grid { stroke: var(--line-soft); stroke-width: 1; }
+.chart .tick { fill: var(--faint); font-size: 10px; }
+.chart .dot  { fill: var(--accent); }
+.chart .seg  { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---------------------------------------------------------------- 提示條 */
+
+.toast {
+  position: fixed; left: 16px; right: 16px; z-index: 200;
+  bottom: calc(84px + var(--safe-b));
+  display: flex; align-items: center; gap: 12px;
+  padding: 13px 16px; border-radius: var(--r);
+  background: var(--text); color: var(--bg); font-size: 14px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .22);
+  animation: toastIn .18s ease-out;
+  max-width: 688px; margin: 0 auto;
+}
+@keyframes toastIn { from { opacity: 0; transform: translateY(8px); } }
+.toast .act { margin-left: auto; flex: none; color: var(--accent); font-weight: 650; padding: 4px 6px; }
+.toast.warn { background: var(--danger); color: #fff; }
+.toast.warn .act { color: #fff; text-decoration: underline; }
+
+/* ---------------------------------------------------------------- 登入 */
+
+.login {
+  min-height: 100dvh;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 18px; padding: 32px 28px calc(48px + var(--safe-b));
+  max-width: 380px; margin: 0 auto;
+}
+.login .mark { font-size: 40px; }
+.login h1 { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -0.02em; text-align: center; }
+.login p { margin: -8px 0 4px; font-size: 14px; color: var(--muted); text-align: center; }
+.login input {
+  width: 100%; height: var(--tap); padding: 0 14px;
+  border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--raised); font-size: 16px;
+}
+.login input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+.login button {
+  width: 100%; height: var(--tap); border-radius: var(--r);
+  background: var(--accent-ink); color: #fff; font-size: 16px; font-weight: 650;
+}
+.login button:disabled { background: var(--line); color: var(--faint); }
+.login .err { color: var(--danger); font-size: 14px; min-height: 20px; margin: 0; }
+
+/* ---------------------------------------------------------------- 桌面
+   手機版滿版；寬螢幕滿版會把表單拉成一條 700px 的細長帶子，很難看。 */
+
+@media (min-width: 640px) {
+  .sheet {
+    max-width: 460px; margin: 0 auto;
+    box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .45);
+    border-left: 1px solid var(--line); border-right: 1px solid var(--line);
+    animation: fadeIn .14s ease-out;
+  }
+  @keyframes fadeIn { from { opacity: 0; } }
+  .fab:hover { filter: brightness(1.06); }
+  .itemrow:hover, .row:hover, .rankrow:hover { background: var(--raised); }
+  .icon-btn:hover { background: var(--raised); }
+}

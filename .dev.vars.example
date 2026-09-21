@@ -1,0 +1,14 @@
+# 複製成 .dev.vars（不會進版控）
+# Copy to .dev.vars (git-ignored)
+
+# 登入密碼 / login password
+APP_PASSWORD=change-me
+
+# 選填：獨立的 session 簽章密鑰。沒設就從密碼衍生。
+# 設了之後可以單獨換掉它把所有裝置踢下線，不用改密碼。
+# Optional: separate session signing secret.
+SESSION_SECRET=
+
+# 選填：覆寫辨識用的 Workers AI 模型。沒設就用 src/extract.js 的預設。
+# Optional: override the Workers AI vision model used for label extraction.
+EXTRACT_MODEL=
