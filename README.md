@@ -24,15 +24,15 @@ Log prices on the phone, review them on a laptop; it works offline.
 
 ---
 
-## Why build it
+## Why I built it
 
-Existing apps (MyGroceryPal, Compare the Trolley) scrape each chain's **online prices**. They cover the main chains and are worth installing as a baseline. What they can't cover:
+I built this for myself. I live in the UK, and my weekly shop is split across big supermarkets, Asian grocers and a few small independent shops.
 
-- **In-store-only prices**: Aldi and Lidl Specialbuys, Co-op yellow stickers, one-branch discounts
-- **Your own idea of "the same thing"**: no database knows you treat Sainsbury's own-brand and Aldi's own-brand as interchangeable
-- **Offline use**: supermarkets often have no signal, and price logging happens standing at the shelf
+- **Asian grocers have no price data.** Apps like MyGroceryPal and Compare the Trolley track the big chains' online prices, and I use them for that. But I couldn't find any app that shows prices at Asian grocers such as Tian Tian Market or Starry Mart, which is where much of what I cook comes from. The only way to compare them was to record the prices myself.
+- **Getting my bearings in a new city.** When I move somewhere new, I want to find the things I usually buy and quickly learn what they cost and where each one is cheapest, instead of rebuilding that sense of prices from scratch.
+- **Some prices only exist on the shelf.** Yellow stickers and one-branch offers never appear online, and there is often no signal inside the shop, so logging has to work offline, standing at the shelf.
 
-So this is a **complement**, not a replacement.
+It sits alongside the existing apps rather than replacing them: they cover the chains' online prices; this covers everything I actually buy.
 
 ---
 
