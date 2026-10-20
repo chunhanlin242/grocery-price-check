@@ -10,7 +10,7 @@ Log prices on the phone, review them on a laptop; it works offline.
 <table>
 <tr>
 <td width="50%" valign="top"><img src="docs/screenshots/01-home-categories.png" width="260" alt="Home page grouped by category"><br>
-<sub><b>Home, grouped by category.</b> The category with the most recorded prices comes first. Each row shows the cheapest unit price and where; tap it for the full ranking. Switch to "recently viewed" or "recently added" at the top.</sub></td>
+<sub><b>Home, grouped by category.</b> Every category is a tile at the top (tap to jump) and a tinted card below; the one with the most recorded prices comes first. Each row shows the cheapest unit price and where.</sub></td>
 <td width="50%" valign="top"><img src="docs/screenshots/02-item-ranking.png" width="260" alt="One item ranked across shops"><br>
 <sub><b>One item, ranked by unit price across every shop.</b> Supermarkets, Asian grocers and independents are ranked together, so there is exactly one cheapest.</sub></td>
 </tr>
@@ -158,6 +158,7 @@ The Worker fetches the rate once a day at 01:30 UTC (fawazahmed0, falling back t
 
 - **Search** by Chinese, English, shelf name or brand
 - **Tap a row** → which shop sells it cheapest (ranking across every shop, trend, every record). The row does only this: an earlier version had a tick circle on the left for "add to basket", which sat too close to the row and got hit by accident. Adding to the basket now lives at the bottom of the item detail
+- **Category tiles at the top**, so every category is visible the moment the app opens; tap one to jump to it. Each category has its own colour (meat rose, vegetables green, dairy blue…) and its items sit in a card tinted that colour, because one flat black-on-white list made it hard to tell where meat ended and vegetables began. Once the tiles scroll away, the same categories reappear as a strip of chips just above the tab bar, within thumb reach. Orange stays reserved for the main action (logging a price)
 - **Grouped by category** by default. The category with the most recorded prices comes first (the things you log most are the things you care about), and items within a category are sorted by name, so opening one never makes the list jump
 - **Recently viewed / recently added** are one tap away. "Recently viewed" is a snapshot taken when you arrive on the page, not re-sorted on every redraw: otherwise opening an item and closing it moves it to the top and shifts everything you were looking at
 
@@ -169,7 +170,7 @@ The basket panel above the list keeps the same logic (per-group totals, coverage
 
 **Android back button.** Back peels off one layer at a time: an open sheet, then an expanded shop, then any other tab back to home, and on home it warns "press back again to leave" before the app actually closes. Switching tabs used to leave no history entry, so back from the Shops or History tab closed the app.
 
-The tabs are **Compare · Shops · Log · History · Settings**. "History" lists every price observation, newest first, and tapping one opens it for editing.
+The tabs are **Compare · Shops · Log · Settings**. "All records" (every price observation, newest first, tap to edit) moved into Settings because it's rarely used; back from it returns to Settings. Sheets close with "‹ Back" rather than "Close", matching what the Android back button does.
 
 ---
 
@@ -348,6 +349,7 @@ public/sw.js        Service worker
 - **Item icons** (2026-08-24): every item has its own emoji (your pick / guessed from the name / category), plus a Condiments category and a "tidy categories" suggestion flow
 - **Mobile overhaul** (2026-10-19): iPhone and Android made consistent (SVG tab icons, 48px tap targets, zoom no longer blocked), all buttons moved to the bottom, Chinese-only interface, single-item rankings across every shop, unit basis follows the shelf label, offers go stale after 14 days and regular prices after 90
 - **Categories and back button** (2026-10-20): home grouped by category (most-logged first) with recently viewed / recently added, produce split into vegetables and fruit, common items to add in one tap, tick circle removed, shop badges and logos, Android back button steps back one layer at a time
+- **Colour and layout** (2026-10-20): category tiles on home, a tinted card per category, category chips docked at the bottom, History moved into Settings, "Close" renamed "Back"
 - **Next**: barcode scanning, multiple lists, prices per branch, and an overall "where to shop this week" recommendation
 
 ### Verified in Phase 1

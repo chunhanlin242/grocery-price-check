@@ -215,7 +215,7 @@ function sheet(titleHtml, bodyHtml, { saveLabel = null, actions = "", closeLabel
     <div class="sheet-head"><h2>${titleHtml}</h2></div>
     <div class="sheet-body">${bodyHtml}</div>
     <div class="sheet-foot">
-      <button class="btn-foot" data-close>${esc(closeLabel || (saveLabel ? "取消" : "關閉"))}</button>
+      <button class="btn-foot" data-close>${esc(closeLabel || (saveLabel ? "取消" : "‹ 返回"))}</button>
       ${actions}
       ${saveLabel ? `<button class="btn-foot primary" data-save>${saveLabel}</button>` : ""}
     </div>`;
@@ -272,6 +272,7 @@ function closeSheet(el) {
 //                開機時推了等於沒推。
 let tabEntry = false;
 let trapArmed = false;
+let subEntry = false;   // 設定 → 所有紀錄：多一層，返回回到設定
 
 document.addEventListener("pointerdown", () => {
   if (trapArmed || tabEntry || state.storeFocus || openSheets.length) return;
@@ -285,6 +286,7 @@ window.addEventListener("popstate", () => {
   if (el) { el.remove(); return; }
   // 店家頁展開某一家時也推了一筆紀錄：安卓的返回鍵／手勢要回到總覽，不是離開 App
   if (state.storeFocus) { state.storeFocus = null; render(); return; }
+  if (subEntry) { subEntry = false; state.route = "settings"; render(); return; }
   if (tabEntry) { tabEntry = false; state.route = "compare"; state.query = ""; state.homeOrder = null; render(); return; }
   if (trapArmed) { trapArmed = false; toast("再按一次返回就會離開", { ms: 2500 }); }
 });
@@ -293,6 +295,7 @@ window.addEventListener("popstate", () => {
 function goRoute(route) {
   let backs = 0;
   if (state.storeFocus) { state.storeFocus = null; backs += 1; }
+  if (subEntry) { subEntry = false; backs += 1; }
   if (route === "compare" && tabEntry) { tabEntry = false; backs += 1; }
   if (backs) { pendingBacks += 1; history.go(-backs); }
   if (route !== "compare" && !tabEntry) { history.pushState({ tab: true }, ""); tabEntry = true; }
@@ -879,7 +882,7 @@ function openPhotoViewer(url) {
       <img src="${esc(url)}" alt="貨架標籤">
     </div>
     <div class="viewer-bar">
-      <button class="btn-foot" data-close>關閉</button>
+      <button class="btn-foot" data-close>‹ 返回</button>
       <button class="btn-foot" data-zoom>🔍 ${bi1("zoom")}</button>
     </div>`;
   document.body.appendChild(el);
@@ -1520,7 +1523,7 @@ async function openItemDetail(itemId) {
     ${historySection(itemId, item)}
     ${observationsSection(itemId)}
   `, {
-    closeLabel: "關閉",
+    closeLabel: "‹ 返回",
     actions: `<button class="btn-foot" data-act="edit">${bi1("edit")}</button>
       <button class="btn-foot" data-act="list">${inList ? "移出清單" : bi1("addToList")}</button>`,
     saveLabel: `＋ ${bi1("record")}`,
@@ -1822,7 +1825,8 @@ const ICON = {
 
 function tabbar() {
   const tab = (route, key) =>
-    `<button class="tab" data-route="${route}"${state.route === route ? ' aria-current="page"' : ""}>
+    `<button class="tab" data-route="${route}"${state.route === route
+      || (route === "settings" && state.route === "history") ? ' aria-current="page"' : ""}>
        <span class="ic">${ICON[route]}</span><span class="nm">${esc(zh(key))}</span></button>`;
 
   return `<nav class="tabbar"><div class="tabbar-inner">
@@ -1833,7 +1837,6 @@ function tabbar() {
         <span class="ic">${ICON.camera}</span><span class="nm">${esc(zh("record"))}</span>
       </button>
     </div>
-    ${tab("history", "historyTab")}
     ${tab("settings", "settings")}
   </div></nav>`;
 }
@@ -1850,14 +1853,14 @@ function itemRowHtml(item, { compact = false } = {}) {
     </span>
     ${best ? `<span class="best">
       <span class="up num">${esc(u.formatUnitPrice(best.unit, item.base_unit))}</span>
-      <span class="who">${esc(best.store.name)}${best.fresh.stale ? " · 舊" : ""}</span>
+      <span class="who">${storeBadge(best.store, "xs")}${esc(best.store.name)}${best.fresh.stale ? " · 舊" : ""}</span>
     </span>` : compact ? "" : `<span class="best"><span class="who">還沒有價格</span></span>`}
   </button>`;
 
   // 整列只有一個動作：點開看哪家最便宜。以前左邊有個勾選圈圈（加進整籃），
   // 但它跟「點開」擠在同一列，常常按錯，而且看不出圈圈是做什麼的。
   // 加進整籃改在明細面板底部做。
-  return `<div class="itemrow${best && best.fresh.stale ? " dim" : ""}">${open}</div>`;
+  return `<div class="itemrow cat-${category(item.category)[0]}${best && best.fresh.stale ? " dim" : ""}">${open}</div>`;
 }
 
 // ---------------------------------------------------------------- 頁面
@@ -1880,30 +1883,46 @@ function renderCompare() {
     data-home-sort="${id}" aria-pressed="${state.homeSort === id}">${label}</button>`;
 
   let body = "";
-  if (state.homeSort === "cat") {
+  if (state.homeSort === "cat" && !q) {
     body = categorySections(rest).map(({ cat, items }) => `
-      <div class="section-head"><h2>${cat[3]} ${esc(cat[1])}</h2>
-        ${cat[0] === "produce"
-          ? `<button class="more" data-act="tidy">分成蔬菜／水果</button>`
-          : `<span class="more num">${items.length}</span>`}</div>
-      ${items.map((i) => itemRowHtml(i)).join("")}`).join("");
+      <section class="catsec cat-${cat[0]}" id="sec-${cat[0]}">
+        <div class="catsec-head"><span class="e">${cat[3]}</span><h2>${esc(cat[1])}</h2>
+          ${cat[0] === "produce"
+            ? `<button class="more" data-act="tidy">分成蔬菜／水果</button>`
+            : `<span class="more num">${items.length}</span>`}</div>
+        <div class="catsec-rows">${items.map((i) => itemRowHtml(i)).join("")}</div>
+      </section>`).join("");
   } else if (rest.length) {
     body = `<div class="section-head"><h2>${q ? "搜尋結果" : state.homeSort === "new" ? "最近新增" : "最近看過"}</h2>
         <span class="more num">${rest.length}</span></div>
-      ${rest.map((i) => itemRowHtml(i)).join("")}`;
+      <div class="plainrows">${rest.map((i) => itemRowHtml(i)).join("")}</div>`;
   }
+
+  // 一打開就看得到所有分類，點一格跳到那一段。搜尋時收起來，只留結果。
+  const cats = !q && state.items.length ? categorySections(state.items) : [];
+  const grid = cats.length ? `<div class="catgrid">${cats.map(({ cat, items }) => `
+      <button class="cattile cat-${cat[0]}" data-jump="${cat[0]}">
+        <span class="e">${cat[3]}</span><span class="n">${esc(cat[1])}</span>
+        <span class="k num">${items.length} 樣</span></button>`).join("")}</div>` : "";
+  // 往下捲過格子之後出現在底部的同一組分類，大拇指搆得到（見 syncCatDock）
+  const dock = cats.length ? `<div class="catdock" hidden><div class="catdock-inner">${cats.map(({ cat }) => `
+      <button class="catchip cat-${cat[0]}" data-jump="${cat[0]}">${cat[3]} ${esc(cat[1])}</button>`).join("")}
+    </div></div>` : "";
 
   return `
     ${topbar("compare")}
-    <main class="screen">
+    <main class="screen${dock ? " has-dock" : ""}">
       <div class="searchbar">
         <input type="search" data-q value="${esc(state.query)}"
                placeholder="搜尋… 牛奶 / milk" autocomplete="off">
       </div>
 
-      ${state.items.length ? `<div class="sortbar" role="group" aria-label="排序">
+      ${grid}
+
+      ${state.items.length ? (q ? "" : `<div class="sortbar" role="group" aria-label="排序">
+        <span class="lb">排序</span>
         ${sortBtn("cat", "分類")}${sortBtn("recent", "最近看過")}${sortBtn("new", "最近新增")}
-      </div>` : `<div class="empty">
+      </div>`) : `<div class="empty">
         <div class="big">🛒</div>
         <p>還沒有任何紀錄<br>按下面的<b>記價</b>拍一張貨架標籤開始</p>
       </div>`}
@@ -1913,11 +1932,36 @@ function renderCompare() {
       ${chosen.length ? `
         <div class="section-head"><h2>✓ ${esc(zh("selected"))}</h2>
           <span class="more num">${chosen.length}</span></div>
-        ${chosen.map((i) => itemRowHtml(i)).join("")}` : ""}
+        <div class="plainrows">${chosen.map((i) => itemRowHtml(i)).join("")}</div>` : ""}
 
       ${body}
     </main>
+    ${dock}
     ${tabbar()}`;
+}
+
+// 分類格子捲出畫面之後，底部才出現分類膠囊。只看格子有沒有被頂端列蓋住。
+function syncCatDock() {
+  const dock = app.querySelector(".catdock");
+  const grid = app.querySelector(".catgrid");
+  if (!dock || !grid) return;
+  const top = app.querySelector(".topbar")?.getBoundingClientRect().bottom || 0;
+  dock.hidden = grid.getBoundingClientRect().bottom > top + 8;
+}
+window.addEventListener("scroll", syncCatDock, { passive: true });
+
+// 跳到某個分類。在「最近看過／最近新增」時沒有分段，先切回分類排法再跳。
+function jumpToCategory(id) {
+  if (state.homeSort !== "cat") {
+    state.homeSort = "cat";
+    state.homeOrder = null;
+    db.setMeta("home_sort", "cat");
+    render();
+  }
+  const sec = document.getElementById("sec-" + id);
+  if (!sec) return;
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  sec.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
 }
 
 const byName = (a, b) => (a.name_zh || a.name_en || "").localeCompare(b.name_zh || b.name_en || "", "zh-Hant");
@@ -2072,7 +2116,10 @@ function renderHistory() {
   }
 
   return `
-    ${topbar("historyTab")}
+    <div class="topbar"><div class="topbar-inner">
+      <button class="icon-btn back" data-act="history-back" aria-label="返回設定">‹</button>
+      <h1>所有紀錄</h1><div class="spacer"></div>${syncBadge()}
+    </div></div>
     <main class="screen">
       ${rows.length ? [...byDate.entries()].map(([date, group]) => `
         <div class="section-head"><h2>${esc(date)}
@@ -2393,6 +2440,12 @@ function renderSettings() {
         <div class="row"><span class="k">待上傳照片</span><span class="v num" data-pending>—</span></div>
       </div>
 
+      <div class="section-head"><h2>紀錄</h2></div>
+      <div class="rows">
+        <button class="row" data-act="open-history"><span class="k">🧾 所有紀錄</span>
+          <span class="v">${state.prices.length} 筆，最新在上面 ›</span></button>
+      </div>
+
       <div class="section-head"><h2>照片</h2></div>
       <div class="rows">
         <button class="row" data-act="batch"><span class="k">${bi1("batch")}</span>
@@ -2555,6 +2608,7 @@ function render() {
   if (scroll) app.querySelector(".screen").scrollTop = scroll;
 
   bindScreen();
+  syncCatDock();
 }
 
 function bindScreen() {
@@ -2621,6 +2675,9 @@ document.addEventListener("click", async (e) => {
     return;
   }
 
+  const jump = e.target.closest("[data-jump]");
+  if (jump) { jumpToCategory(jump.dataset.jump); return; }
+
   const sortBtn = e.target.closest("[data-home-sort]");
   if (sortBtn) {
     state.homeSort = sortBtn.dataset.homeSort;
@@ -2633,6 +2690,16 @@ document.addEventListener("click", async (e) => {
   const act = e.target.closest("[data-act]")?.dataset.act;
 
   if (act === "add") { openRecordMenu(); return; }
+  // 「紀錄」很少用，從底部選單移進設定。多推一層，返回鍵回到設定而不是首頁
+  if (act === "open-history") {
+    history.pushState({ sub: true }, "");
+    subEntry = true;
+    state.route = "history";
+    render();
+    window.scrollTo(0, 0);
+    return;
+  }
+  if (act === "history-back") { history.back(); return; }
   if (act === "batch") { openBatchImport(); return; }
   if (act === "resume-batch") { nextInQueue(); return; }
   if (act === "drop-batch") {

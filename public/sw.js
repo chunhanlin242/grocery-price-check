@@ -9,7 +9,7 @@
 // 超市裡最麻煩的不是完全沒網路，而是連得上卻慢得要命。網路優先會讓開啟 App
 // 卡在等逾時；反正資料在 IndexedDB，shell 拿舊的也無所謂。
 
-const VERSION = "v15";
+const VERSION = "v16";
 const CACHE = "pc-shell-" + VERSION;
 
 // 注意：不要放 "/index.html"。
