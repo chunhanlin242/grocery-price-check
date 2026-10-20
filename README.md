@@ -3,22 +3,22 @@
 Photograph a shelf label and see which shop sells that item cheapest, and where this week's basket costs least.
 Log prices on the phone, review them on a laptop; it works offline.
 
-**Runs on** Cloudflare Workers + D1 + R2 + Workers AI. Deployed on my own domain for personal use (single user, password-protected), so there is no public demo; the screenshots below are from the live app.
+**Runs on** Cloudflare Workers + D1 + R2 + Workers AI. Deployed on my own domain for personal use (single user, password-protected), so there is no public demo; the screenshots below use sample data.
 
-*The UI pairs Chinese with English because I built it for my own use: Chinese says what an item is, English matches the shelf label. Key screens are annotated in English below.*
+*The interface is Chinese only, because I built it for my own use; item names, shelf names and shop names keep their English so they still match what's printed in the shop. Key screens are annotated in English below. Screenshots use sample data.*
 
 <table>
 <tr>
-<td width="50%" valign="top"><img src="docs/screenshots/01-shop-scoreboard.png" width="260" alt="Shops page"><br>
-<sub><b>Shops.</b> Each card lists what that shop is cheapest for, and how much you save versus the next-cheapest shop in the same group.</sub></td>
+<td width="50%" valign="top"><img src="docs/screenshots/01-home-categories.png" width="260" alt="Home page grouped by category"><br>
+<sub><b>Home, grouped by category.</b> The category with the most recorded prices comes first. Each row shows the cheapest unit price and where; tap it for the full ranking. Switch to "recently viewed" or "recently added" at the top.</sub></td>
 <td width="50%" valign="top"><img src="docs/screenshots/02-item-ranking.png" width="260" alt="One item ranked across shops"><br>
-<sub><b>One item, ranked by unit price.</b> Supermarkets and Asian grocers are ranked separately, so each group has its own cheapest.</sub></td>
+<sub><b>One item, ranked by unit price across every shop.</b> Supermarkets, Asian grocers and independents are ranked together, so there is exactly one cheapest.</sub></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><img src="docs/screenshots/03-label-confirm1.png" width="260" alt="Price form filled from a shelf-label photo"><br>
-<sub><b>From a shelf-label photo.</b> AI reads price, pack size and name into the form; unit price (£/kg) and an approximate TWD figure update as you type.</sub></td>
-<td width="50%" valign="top"><img src="docs/screenshots/04-label-confirm2.png" width="260" alt="Rest of the price form"><br>
-<sub><b>Nothing is saved unchecked.</b> The rest of the form stays editable, and the record is marked as AI-read and confirmed by me.</sub></td>
+<td width="50%" valign="top"><img src="docs/screenshots/03-shop-scoreboard.png" width="260" alt="Shops page"><br>
+<sub><b>Shops.</b> Each card lists what that shop is cheapest for and how much you save. Every shop has a brand-coloured badge; the shop switcher sits at the bottom, within thumb reach.</sub></td>
+<td width="50%" valign="top"><img src="docs/screenshots/04-preset-items.png" width="260" alt="Common items to add with one tap"><br>
+<sub><b>Common items, one tap to add.</b> Things you haven't bought yet (lamb slices, say) are listed by category, with the category and unit basis already set.</sub></td>
 </tr>
 </table>
 
@@ -58,17 +58,17 @@ An item's **unit basis** (weight, volume or count) drives every conversion. Choo
 
 **3. AI only suggests.** Label-reading results always go into a form for you to check; they are never written straight to the database. A wrong price is worse than no price: it contaminates every later comparison, and you won't notice.
 
-Also, **prices go stale**. Every price records its local date, the UI always shows "seen N days ago", and anything older than 30 days is greyed out and marked "out of date". UK food prices move fast; comparing against a three-month-old number is guessing.
+Also, **prices go stale**. Every price records its local date, the UI always shows "seen N days ago", and old prices are greyed out and marked "out of date": after 90 days for a regular price, 14 days for an offer. A single 30-day threshold marked almost every row as old a month after logging, so the marker carried no information.
 
 ---
 
-## Chinese and English side by side
+## Chinese interface, English names
 
-I live in the UK but think in Chinese, so both languages have to be there: Chinese says what the thing is, English says how to find it in the shop or search for it online.
+I live in the UK but think in Chinese. The first version put Chinese and English side by side on every button and heading, which doubled the text and made the phone screens hard to use. Now:
 
-- **Data**: items have `name_zh` / `name_en`; products also store the English name printed on the shelf
-- **Interface**: Chinese at the main size, English one size smaller in the `--faint` colour beside it
-- **Exception**: shop names always use the original English brand. They should look exactly like the sign outside; a Chinese transliteration of "Sainsbury's" wouldn't match anything in the shop
+- **Interface**: Chinese only (buttons, headings, messages)
+- **Data**: items have `name_zh` / `name_en`, and products store the English name printed on the shelf, because English is what you need to find the thing in the shop
+- **Shop names** always use the original brand. They should look exactly like the sign outside; a Chinese transliteration of "Sainsbury's" wouldn't match anything in the shop
 
 ---
 
@@ -90,7 +90,7 @@ The queue is stored in IndexedDB, not just in memory: if the phone kills the app
 
 ## Shops in three groups
 
-**Price rankings and basket totals are calculated per group, and each group gets its own cheapest shop**:
+**Basket totals are calculated per group; single-item rankings compare every shop together**:
 
 | Group | Shops |
 |---|---|
@@ -98,22 +98,19 @@ The queue is stored in IndexedDB, not just in memory: if the phone kills the app
 | 🥢 Asian supermarkets | Tian Tian Market · Starry Mart · Other Asian |
 | 🏪 Independents | Greengrocers, butchers, market stalls, farm shops, Turkish / Middle Eastern grocers… (almost all added by the user; the only built-in one is "Other independent" for shops with no name) |
 
-**Why separate them.** These groups don't compete on the same shelf: you can't buy soy sauce at Aldi, nobody makes a trip to an Asian supermarket for milk, and the greengrocer on the corner sells only a dozen things but is often cheapest. Mixing them produces two useless conclusions:
+**Why baskets are per group.** You can't buy soy sauce at Aldi, so a shop that stocks only a few of the basket's items would always come last for missing so much. Grouping matches how shopping actually works (everyday items at Aldi, Asian ingredients at Tian Tian, vegetables from the greengrocer on the way).
 
-- Single item: "Tian Tian's milk costs more than Aldi's": true, but not an option you'd ever consider
-- Basket total: shops that stock only a few items always come last because they're missing so much
-
-Grouping matches how shopping actually works (everyday items at Aldi, Asian ingredients at Tian Tian, vegetables from the greengrocer on the way), and the tool follows that reality.
+**Why single items are not.** Ranking each group separately used to give courgettes two "cheapest" shops side by side (a supermarket and a greengrocer), and you couldn't tell which was actually cheaper. When two shops both sell the same thing, comparing them directly is the honest answer. The shops page uses the same ranking, so the two pages never contradict each other.
 
 Adding a fourth group takes one row in `GROUPS` in `stores.js`: rankings, baskets, the shop row and the shop editor's dropdown all follow it.
-
-An item with data in only one group (soy sauce, say) shows no group heading; it would just be noise.
 
 ### Adding your own shops
 
 The Asian grocer on the corner, a market stall, a one-off small supermarket: these are often the cheapest places, and not being on the list shouldn't stop you logging them. **Each group has a `＋` at the end of its row when logging a price**; add the shop on the spot and it's selected automatically when saved (you're standing in it). Shops can also be managed from Settings → Shops.
 
-A custom shop has a group (who it's compared against), a colour (used in trend charts and rankings) and a note (which branch).
+A custom shop has a group (which basket it counts in), a colour (used for its badge, trend charts and rankings) and a note (which branch).
+
+**Every shop has a badge.** Chains use their own site icon; anything else (including custom shops) gets a brand-coloured square with one letter, or the first character of a Chinese name. The text colour is picked from the background's luminance, so Co-op's sky blue and Morrisons' yellow stay legible. The public copy of this repo ships without the logos, so there every shop shows its letter badge.
 
 **Built-in chains live in `public/stores.js`; custom shops live in D1.** The first almost never changes, so syncing it would be wasted work and would make every device wait for sync before shops appeared. The second only you know about, so **it must sync along with the prices**, or another device would show those prices with no shop name.
 
@@ -155,17 +152,24 @@ The Worker fetches the rate once a day at 01:30 UTC (fawazahmed0, falling back t
 
 ---
 
-## Home: search → tap a name → tick a basket
+## Home: search → tap a row
 
-"Compare" and "List" used to be two pages, but they were two halves of the same job: both listed items. Keeping them apart meant finding something on the compare page, remembering it, then adding it again on the list page. Now it's one page:
+"Compare" and "List" used to be two pages, but they were two halves of the same job: both listed items. Now it's one page:
 
 - **Search** by Chinese, English, shelf name or brand
-- **Tap a name** → which shop sells it cheapest (per-group ranking, trend, every record)
-- **Tap the circle on the left** → add to the basket; ticked items float to the top, with the totals panel right above them
+- **Tap a row** → which shop sells it cheapest (ranking across every shop, trend, every record). The row does only this: an earlier version had a tick circle on the left for "add to basket", which sat too close to the row and got hit by accident. Adding to the basket now lives at the bottom of the item detail
+- **Grouped by category** by default. The category with the most recorded prices comes first (the things you log most are the things you care about), and items within a category are sorted by name, so opening one never makes the list jump
+- **Recently viewed / recently added** are one tap away. "Recently viewed" is a snapshot taken when you arrive on the page, not re-sorted on every redraw: otherwise opening an item and closing it moves it to the top and shifts everything you were looking at
 
-The basket panel keeps the same logic (per-group totals, coverage first, no filled-in data). Quantity adjustments are tucked into a collapsible "Adjust quantities" section, because most of the time you only want the total.
+The basket panel above the list keeps the same logic (per-group totals, coverage first, no filled-in data).
 
-The tabs are now **Compare · Shops · Log · History · Settings**. The new "🧾 History" lists every price observation, newest first, and tapping one opens it for editing. To fix a mistyped price you usually remember "the one I just entered", not which item it belongs to.
+**Common items.** When picking an item, about 90 common groceries are listed by category (vegetables, fruit, meat…); tap one and it's created with its category and unit basis set. If the guessed unit is wrong, the first shelf label you log corrects it, because the label's unit-price line wins while the item has no products yet.
+
+**One-handed use.** All buttons sit at the bottom: Cancel and Save at the foot of each sheet, menus slide up from the bottom, and the shop switcher is just above the tab bar. Only the search box stays at the top, because on an iPhone a bottom input gets covered by the keyboard.
+
+**Android back button.** Back peels off one layer at a time: an open sheet, then an expanded shop, then any other tab back to home, and on home it warns "press back again to leave" before the app actually closes. Switching tabs used to leave no history entry, so back from the Shops or History tab closed the app.
+
+The tabs are **Compare · Shops · Log · History · Settings**. "History" lists every price observation, newest first, and tapping one opens it for editing.
 
 ---
 
@@ -195,7 +199,7 @@ Tap a card for the full list, split into three parts:
 
 **"Only recorded here" deliberately doesn't count as a win.** Being the only shop with a record doesn't mean it's cheap, only that nobody has logged the same thing elsewhere. Counting it as a win would make you think the shop is good value.
 
-Percentages compare **unit prices**, and only **within the same group** (see the grouping rationale above). A win is compared with second place (how much you save); a loss is compared with first place (how much more you pay).
+Percentages compare **unit prices** across every shop, using the same ranking as the item detail. A win is compared with second place (how much you save); a loss is compared with first place (how much more you pay).
 
 This page replaced the old "Items" tab. The home page already lists and searches every item, so the `＋` for adding an item moved to the top right of the home page.
 
@@ -317,8 +321,11 @@ schema.sql          D1 schema (6 sync tables, each with id/updated_at/deleted_at
 public/app.js       Screens and interaction (one file, divided by section comments)
 public/db.js        IndexedDB + sync queue + photo upload queue
 public/units.js     Unit conversion, unit prices, amount formatting, date freshness
-public/i18n.js      Chinese/English string table and layout helpers
-public/stores.js    Built-in shop list and groups
+public/i18n.js      Interface strings (Chinese) and the bilingual item-name helper
+public/stores.js    Built-in shop list, groups and shop badges
+public/emoji.js     Name → icon / category keyword table
+public/presets.js   Common items offered when picking an item
+public/logos/       Chain logos (not included in the public copy)
 public/export.js    CSV and xlsx generator (no dependencies; builds the zip itself)
 public/fx.js        GBP→TWD conversion and formatting (reference only, not frozen)
 public/app.css      Styles (CSS variables at the top)
@@ -339,6 +346,8 @@ public/sw.js        Service worker
 - **Home redesign and photo zoom** (2026-08-24): compare and list merged into one page (search + tick + basket total), new History page, photos zoomable
 - **Shop scoreboard** (2026-08-24): the items tab became a shop-first view. Cards list each shop's three best deals and the saving without tapping in; the detail splits into best buys / only recorded here / don't buy here
 - **Item icons** (2026-08-24): every item has its own emoji (your pick / guessed from the name / category), plus a Condiments category and a "tidy categories" suggestion flow
+- **Mobile overhaul** (2026-10-19): iPhone and Android made consistent (SVG tab icons, 48px tap targets, zoom no longer blocked), all buttons moved to the bottom, Chinese-only interface, single-item rankings across every shop, unit basis follows the shelf label, offers go stale after 14 days and regular prices after 90
+- **Categories and back button** (2026-10-20): home grouped by category (most-logged first) with recently viewed / recently added, produce split into vegetables and fruit, common items to add in one tap, tick circle removed, shop badges and logos, Android back button steps back one layer at a time
 - **Next**: barcode scanning, multiple lists, prices per branch, and an overall "where to shop this week" recommendation
 
 ### Verified in Phase 1
@@ -384,4 +393,8 @@ All of these were actually run, not just read through:
 - **Tidy categories**: correctly suggested 6 changes (soy sauce / rice wine / miso → condiments, tofu → staples, chicken breast → meat, dumpling wrappers → staples); running it again after applying shows "all correct"
 - **Manual icon**: changing to 🥬 takes effect and saves; switching back to "automatic" correctly restores the guessed 🌶️
 
-**Not yet verified**: label-reading accuracy on real shelf photos (needs photos taken in a shop), the camera flow on real iOS/Android devices (desktop browsers fall back to choosing a file), and how the exported files look when actually opened in Excel, Numbers or Google Sheets (the structure and XML were checked with independent tools, but those apps were never opened).
+- **Back button** (2026-10-20, Playwright): sheet → tab → home → "press back again" → leaves; each step checked
+- **Home ordering**: opening and closing an item in "recently viewed" left the order unchanged; it moved to the top only after returning to the page. With legacy "produce" items, "tidy" proposed courgette and pak choi → vegetables, apple → fruit
+- **Common items**: tapping "lamb slices" created a meat item priced by weight; items that already exist (milk) aren't offered again
+
+**Not yet verified**: the 2026-10 changes on real iPhone and Android devices, label-reading accuracy on real shelf photos (needs photos taken in a shop), the camera flow on real iOS/Android devices (desktop browsers fall back to choosing a file), and how the exported files look when actually opened in Excel, Numbers or Google Sheets (the structure and XML were checked with independent tools, but those apps were never opened).

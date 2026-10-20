@@ -19,6 +19,7 @@ const SYNC_TABLES = {
   photos:     ["id", "r2_key", "store_id", "taken_at", "width", "height", "created_at", "updated_at", "deleted_at"],
   lists:      ["id", "name", "archived", "created_at", "updated_at", "deleted_at"],
   list_items: ["id", "list_id", "item_id", "qty", "sort", "checked", "created_at", "updated_at", "deleted_at"],
+  item_views: ["id", "viewed_at", "created_at", "updated_at", "deleted_at"],
 };
 
 // ---------------------------------------------------------------- 工具

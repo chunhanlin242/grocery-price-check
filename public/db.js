@@ -10,9 +10,10 @@ const DB_NAME = "price-check";
 // 加了新的 object store 就一定要進版，否則已經在用的裝置不會觸發 onupgradeneeded，
 // 開 transaction 時直接 NotFoundError 整個 App 掛掉。
 //   v2：加入 stores（自訂店家）
-const DB_VERSION = 2;
+//   v3：加入 item_views（最近看過，首頁排序用）
+const DB_VERSION = 3;
 
-export const TABLES = ["stores", "items", "products", "prices", "photos", "lists", "list_items"];
+export const TABLES = ["stores", "items", "products", "prices", "photos", "lists", "list_items", "item_views"];
 
 let _db = null;
 

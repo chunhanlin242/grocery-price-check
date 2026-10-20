@@ -45,18 +45,18 @@ const BUILTIN = [
   { id: "tesco",      group: "uk", name: "Tesco",       short: "TE", color: "#00539f" },
   { id: "asda",       group: "uk", name: "Asda",        short: "AS", color: "#68a51c" },
   { id: "morrisons",  group: "uk", name: "Morrisons",   short: "MO", color: "#c8a200" },
-  { id: "ms",         group: "uk", name: "M&S Food",    short: "MS", color: "#3d3d3d" },
+  { id: "ms",         group: "uk", name: "M&S Food",    short: "MS", color: "#3d3d3d", mark: "M&S" },
   { id: "iceland",    group: "uk", name: "Iceland",     short: "IC", color: "#cc0000" },
   { id: "ocado",      group: "uk", name: "Ocado",       short: "OC", color: "#7b1fa2" },
-  { id: "other",      group: "uk", name: "Other",       short: "··", color: "#737373" },
+  { id: "other",      group: "uk", name: "Other",       short: "··", color: "#737373", mark: "…" },
 
   // 亞洲超市
   { id: "tiantian",   group: "asian", name: "Tian Tian Market", short: "TT", color: "#b3121b" },
   { id: "starrymart", group: "asian", name: "Starry Mart",      short: "SM", color: "#00838f" },
-  { id: "asianother", group: "asian", name: "Other Asian",      short: "··", color: "#8d6e63" },
+  { id: "asianother", group: "asian", name: "Other Asian",      short: "··", color: "#8d6e63", mark: "…" },
 
   // 獨立店家（其餘都靠自己新增）
-  { id: "indieother", group: "indie", name: "Other independent", short: "··", color: "#455a64" },
+  { id: "indieother", group: "indie", name: "Other independent", short: "··", color: "#455a64", mark: "…" },
 ].map((s) => ({ ...s, builtin: true }));
 
 // 自訂店家的配色。挑得開、深淺一致，而且跟內建那些不要撞得太厲害。
@@ -64,6 +64,43 @@ export const PALETTE = [
   "#e8590c", "#c2185b", "#7b1fa2", "#3949ab",
   "#0277bd", "#00897b", "#558b2f", "#8d6e63",
 ];
+
+// ---------------------------------------------------------------- 圖示
+
+// 店家圖示：有商標圖就用圖，沒有就是品牌色底＋一個字（中文店名取第一個字）。
+// 自訂店家的 id 是 UUID，所以商標圖照店名對（小寫、去空白）。
+// 圖檔放 public/logos/，加了新的記得進 sw.js 的 SHELL。
+//
+// 圖是各家官網自己的網站圖示（Sainsbury's、龍鳳行、Tian Tian 抓不到夠清楚的，用字章）。
+// 這是別人的商標，公開快照會把 logos/ 整個拿掉、這張表換成空的 —— 所以這張表要維持一行。
+const LOGOS = {};
+
+const logoKey = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9一-鿿]/g, "");
+
+export function storeLogo(store) {
+  return LOGOS[store.id] || LOGOS[logoKey(store.name)] || null;
+}
+
+export function storeMark(store) {
+  if (store.mark) return store.mark;
+  const cjk = store.name.match(/[一-鿿]/);
+  if (cjk) return cjk[0];
+  return (store.name.match(/[A-Za-z0-9]/) || ["?"])[0].toUpperCase();
+}
+
+// 品牌色有深有淺（Co-op 的天藍、Morrisons 的黃），白字壓上去會看不清楚，
+// 照亮度挑黑字或白字。
+export function inkOn(hex) {
+  const m = String(hex || "").match(/^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+  if (!m) return "#fff";
+  const [r, g, b] = m.slice(1).map((h) => {
+    const c = parseInt(h, 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  const L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  // 跟白字的對比 (1.05)/(L+0.05) 與跟黑字的 (L+0.05)/0.05，取大的
+  return 1.05 / (L + 0.05) >= (L + 0.05) / 0.05 ? "#fff" : "#111";
+}
 
 // ---------------------------------------------------------------- 執行期登錄
 

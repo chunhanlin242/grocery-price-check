@@ -1,11 +1,7 @@
-// 中英並列。
+// 介面文字。
 //
-// 使用者住在英國但用中文思考：中文負責「這是什麼」，英文負責「在店裡怎麼找、
-// 網站上怎麼搜」。所以不是二選一的語言切換，是兩個都要同時看得到。
-//
-// 排版規則：中文為主字級、英文小一號且用 --faint。
-//   bi()  兩行（頁面標題、清單主要文字）
-//   bi1() 同一行（按鈕、chip、短標籤）
+// 使用者住在英國但用中文思考。介面只用中文；品名、貨架名這類「在店裡要靠它找」
+// 的資料才中英並列（biText）。
 
 export const L = {
   // 導覽
@@ -31,7 +27,7 @@ export const L = {
   confirm:    ["確認", "Confirm"],
 
   // 記價
-  store:      ["超市", "Store"],
+  store:      ["店家", "Store"],
   photo:      ["照片", "Photo"],
   takePhoto:  ["拍標籤", "Take photo"],
   choosePhoto:["選照片", "From library"],
@@ -113,7 +109,8 @@ export const CATEGORIES = [
   ["dairy",     "乳製品", "Dairy",      "🥛"],
   ["meat",      "肉類",   "Meat",       "🥩"],
   ["fish",      "海鮮",   "Fish",       "🐟"],
-  ["produce",   "蔬果",   "Produce",    "🥬"],
+  ["veg",       "蔬菜",   "Vegetables", "🥬"],
+  ["fruit",     "水果",   "Fruit",      "🍎"],
   ["bakery",    "麵包",   "Bakery",     "🍞"],
   ["staples",   "主食",   "Staples",    "🍚"],
   ["sauce",     "調味料", "Condiments", "🫗"],
@@ -125,10 +122,16 @@ export const CATEGORIES = [
   ["household", "家用",   "Household",  "🧻"],
   ["personal",  "個人用品", "Personal",  "🧴"],
   ["other",     "其他",   "Other",      "•"],
+  // 2026-10 拆成蔬菜／水果之前的舊分類。留著是因為已經存進資料庫的品項還指著它，
+  // 拿掉的話它們會掉成「其他」；「整理分類與圖示」會逐條提議改成蔬菜或水果。
+  // 選單裡不再出現（見 CATEGORY_CHOICES）。
+  ["produce",   "蔬果",   "Produce",    "🥬"],
 ];
 
 const CAT_BY_ID = new Map(CATEGORIES.map((c) => [c[0], c]));
 export const category = (id) => CAT_BY_ID.get(id) || CAT_BY_ID.get("other");
+// 給新增／編輯品項的選單：不含已經拆掉的舊分類
+export const CATEGORY_CHOICES = CATEGORIES.filter((c) => c[0] !== "produce");
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -136,14 +139,17 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
 export const zh = (k) => (L[k] ? L[k][0] : k);
 export const en = (k) => (L[k] ? L[k][1] : "");
 
-// 兩行式
+// 介面字（按鈕、標題、選單）只顯示中文。
+//
+// 原本每個標籤都中英並列，結果畫面上的字多一倍，手機上擠得很難用。
+// 英文真正有用的地方是「在店裡怎麼找」—— 品名與貨架名，那些走 biText()，照舊中英都顯示。
+// 英文字串留在 L 裡，匯出與 aria 之後要用還拿得到。
 export function bi(k) {
-  return `<span class="bi"><b>${esc(zh(k))}</b><i>${esc(en(k))}</i></span>`;
+  return esc(zh(k));
 }
 
-// 同一行
 export function bi1(k) {
-  return `${esc(zh(k))} <i class="en">${esc(en(k))}</i>`;
+  return esc(zh(k));
 }
 
 // 資料裡的中英文（品項名稱那種），兩邊都可能是空的
@@ -159,4 +165,4 @@ export function biText(zhText, enText, { block = false } = {}) {
 }
 
 // 純文字版，給 aria-label、placeholder、title 這種不吃 HTML 的地方
-export const plain = (k) => `${zh(k)} ${en(k)}`.trim();
+export const plain = (k) => zh(k);

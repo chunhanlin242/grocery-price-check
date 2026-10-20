@@ -22,6 +22,7 @@
   --ok-weak:     #e6f4ee;
 
   --r: 10px;
+  /* 點擊區一律 48px：安卓的標準是 48dp，iPhone 是 44pt，取大的兩邊都過 */
   --tap: 48px;
   --safe-b: env(safe-area-inset-bottom, 0px);
 
@@ -74,6 +75,8 @@ body {
 
 button, input, select, textarea { font: inherit; color: inherit; }
 button { background: none; border: 0; cursor: pointer; padding: 0; }
+/* 快速連點不要被當成「雙擊放大」。解除放大鎖之後這條才需要 */
+button, a, input, select, label { touch-action: manipulation; }
 
 .num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
 .hidden { display: none !important; }
@@ -128,7 +131,7 @@ i.en {
 .sync-label { font-size: 12px; color: var(--muted); }
 
 .icon-btn {
-  flex: none; width: 44px; height: 44px; margin: -10px 0;
+  flex: none; width: var(--tap); height: var(--tap); margin: -12px 0;
   display: flex; align-items: center; justify-content: center;
   font-size: 20px; line-height: 1; border-radius: 8px;
 }
@@ -150,9 +153,9 @@ i.en {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
   color: var(--muted);
 }
-.tab .ic { font-size: 18px; line-height: 1; }
-.tab .nm { font-size: 11px; line-height: 1.15; }
-.tab .en { font-size: 9px; line-height: 1.15; }
+.tab .ic { line-height: 0; margin-bottom: 2px; }
+.tab .nm { font-size: 12px; line-height: 1.15; }
+.tab .en { font-size: 11px; line-height: 1.15; }
 .tab[aria-current="page"] { color: var(--text); }
 .tab[aria-current="page"] .nm { font-weight: 650; }
 
@@ -164,8 +167,8 @@ i.en {
   margin-top: -20px;
   box-shadow: 0 4px 14px rgba(232, 89, 12, .35);
 }
-.fab .ic { font-size: 21px; line-height: 1; }
-.fab .nm { font-size: 10px; font-weight: 650; letter-spacing: .02em; }
+.fab .ic { line-height: 0; }
+.fab .nm { font-size: 11px; font-weight: 650; letter-spacing: .02em; }
 .fab:active { transform: scale(.94); }
 
 /* ---------------------------------------------------------------- 區塊標題 */
@@ -188,16 +191,24 @@ i.en {
 
 .searchbar { padding: 10px 18px 12px; border-bottom: 1px solid var(--line-soft); }
 .searchbar input {
-  width: 100%; height: 44px; padding: 0 14px;
+  width: 100%; height: var(--tap); padding: 0 14px;
   border: 1px solid var(--line); border-radius: var(--r);
   background: var(--raised); font-size: 16px;
 }
 .searchbar input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
 
+/* 首頁排法切換：分類／最近看過／最近新增 */
+.sortbar { display: flex; gap: 8px; padding: 10px 18px 2px; overflow-x: auto; }
+.sortbar .chip { padding: 0 16px; }
+.section-head button.more { min-height: var(--tap); padding: 0 4px; font-weight: 600; }
+
+/* 新增品項選單裡的常用品項 */
+.preset-cat { padding: 12px 18px 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.preset-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 18px 6px; }
+
 /* ---------------------------------------------------------------- 品項列 */
 
-/* 一列裡有兩個按鈕：左邊圈圈是「加進整籃」，其餘是「看這一樣哪家便宜」。
-   按鈕不能巢狀，所以不是一個大 button。 */
+/* 整列一個按鈕：點開看這一樣哪家便宜。加進整籃在明細面板裡。 */
 .itemrow {
   display: flex; align-items: stretch;
   width: 100%;
@@ -212,24 +223,7 @@ i.en {
 }
 .itemrow .open:active { background: var(--raised); }
 
-.itemrow .pick {
-  flex: none; width: 48px;
-  display: flex; align-items: center; justify-content: center;
-  color: var(--faint); font-size: 15px; font-weight: 700;
-}
-.itemrow .pick::before {
-  content: ""; position: absolute;
-  width: 24px; height: 24px; border-radius: 50%;
-  border: 1.5px solid var(--line);
-}
-.itemrow .pick { position: relative; }
-.itemrow.picked .pick { color: #fff; }
-.itemrow.picked .pick::before { background: var(--accent-ink); border-color: var(--accent-ink); }
-.itemrow.picked { background: var(--accent-weak); }
-.itemrow .pick > * { position: relative; }
-
-/* 選單裡的品項列沒有圈圈，整列都是 open */
-.itemrow .open:only-child { padding-left: 18px; }
+.itemrow .open { padding-left: 18px; }
 .itemrow .ic { font-size: 20px; width: 26px; text-align: center; flex: none; }
 .itemrow .body { flex: 1; min-width: 0; }
 .itemrow .nm { font-size: 15px; font-weight: 550; display: block; }
@@ -297,6 +291,44 @@ i.en {
   font-size: 11px; color: var(--faint);
 }
 
+/* 一樣都沒贏的店：一行就好，要看再點 */
+.storemini-head {
+  padding: 14px 18px 6px;
+  font-size: 12px; font-weight: 600; color: var(--faint);
+}
+.storemini-head .en { font-size: 11px; }
+.storemini-list {
+  margin: 0 18px 8px;
+  border: 1px solid var(--line); border-radius: var(--r); overflow: hidden;
+}
+.storemini {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; min-height: var(--tap); padding: 10px 14px 10px 12px;
+  text-align: left; color: inherit;
+  border-top: 1px solid var(--line-soft);
+  border-left: 4px solid var(--c);
+}
+.storemini:first-child { border-top: 0; }
+.storemini:active { background: var(--raised); }
+.storemini .sm-name { font-size: 15px; font-weight: 650; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.storemini .sm-meta { margin-left: auto; flex: none; font-size: 12px; color: var(--faint); }
+.storemini .sm-go { flex: none; font-size: 20px; line-height: 1; color: var(--faint); }
+
+/* 店家切換列：固定在底部、貼著選單列上方，大拇指搆得到 */
+.storedock {
+  position: fixed; left: 0; right: 0; z-index: 29;
+  bottom: calc(66px + var(--safe-b));
+  background: var(--bg); border-top: 1px solid var(--line-soft);
+}
+.storebar.storefocus { padding: 8px 18px; border-bottom: 0; max-width: 720px; margin: 0 auto; }
+.screen.has-dock { padding-bottom: calc(84px + 64px + var(--safe-b)); }
+
+/* 展開某一家時的店名區 */
+.storehead { padding: 18px 18px 14px; border-left: 5px solid var(--c); }
+.storehead .sh-name { margin: 0; font-size: 24px; font-weight: 750; letter-spacing: -0.02em; line-height: 1.2; }
+.storehead .sh-meta { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+.storehead .sh-meta .en { font-size: 12px; }
+
 /* 店家明細最上面的三格計分 */
 .scoreline {
   display: grid; grid-template-columns: repeat(3, 1fr);
@@ -308,7 +340,7 @@ i.en {
 .scoreline > div:last-child { border-right: 0; }
 .scoreline .n { display: block; font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }
 .scoreline .l { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
-.scoreline .l .en { display: block; font-size: 9px; color: var(--faint); }
+.scoreline .l .en { display: block; font-size: 11px; color: var(--faint); }
 
 /* 省多少／貴多少 */
 .delta {
@@ -332,12 +364,12 @@ i.en {
 .grouphead .en { font-size: 11px; }
 .grouphead .num { float: right; color: var(--faint); font-weight: 400; }
 
-.linkbtn { margin-left: auto; font-size: 13px; color: var(--accent-ink); padding: 6px 4px; min-height: 44px; }
+.linkbtn { margin-left: auto; font-size: 13px; color: var(--accent-ink); padding: 6px 4px; min-height: var(--tap); }
 
 .basket-lines { border-top: 1px solid var(--line-soft); background: var(--bg); }
 .basket-lines summary {
   padding: 14px 18px; font-size: 13px; color: var(--muted);
-  cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 6px;
+  cursor: pointer; min-height: var(--tap); display: flex; align-items: center; gap: 6px;
 }
 .basket-lines summary::-webkit-details-marker { display: none; }
 .basket-lines summary::before { content: "▸"; color: var(--faint); }
@@ -347,15 +379,12 @@ i.en {
 /* ---------------------------------------------------------------- 照片檢視器
    貨架標籤的字很小，96px 縮圖讀不出價格 —— 這是它存在的唯一理由。 */
 
-.sheet.viewer { background: #0b0b0b; color: #fff; }
+.sheet.viewer { background: #0b0b0b; color: #fff; padding-top: env(safe-area-inset-top, 0px); }
 .viewer-bar {
-  display: flex; align-items: center; gap: 12px;
-  padding: 10px 14px; flex: none;
-  padding-top: calc(10px + env(safe-area-inset-top, 0px));
+  display: flex; gap: 8px; flex: none;
+  padding: 10px 14px calc(10px + var(--safe-b));
 }
-.viewer-bar .x { font-size: 24px; width: 48px; height: 48px; color: #fff; }
-.viewer-bar .spacer { flex: 1; }
-.viewer-bar .btn-small { background: rgba(255,255,255,.12); border-color: transparent; color: #fff; }
+.viewer-bar .btn-foot { background: rgba(255,255,255,.12); border-color: transparent; color: #fff; }
 
 .viewer-stage {
   flex: 1; min-height: 0; overflow: auto;
@@ -384,6 +413,23 @@ i.en {
   border-radius: 6px; padding: 1px 5px; font-size: 11px;
 }
 
+/* ---------------------------------------------------------------- 店家圖示 */
+
+/* 商標圖或品牌色字章。圖放在白底圓角方塊裡：商標多半是為白底設計的，深色模式也一樣 */
+.sbadge {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 8px;
+  font-size: 15px; font-weight: 750; line-height: 1; letter-spacing: -0.02em;
+  overflow: hidden;
+}
+.sbadge.sm { width: 22px; height: 22px; border-radius: 6px; font-size: 12px; }
+.sbadge.lg { width: 38px; height: 38px; border-radius: 10px; font-size: 19px; vertical-align: -6px; margin-right: 10px; }
+.sbadge.wide { font-size: 10px; }
+.sbadge.sm.wide { font-size: 8px; }
+.sbadge.lg.wide { font-size: 13px; }
+.sbadge.logo { background: #fff; box-shadow: inset 0 0 0 1px var(--line); padding: 3px; }
+.sbadge.logo img { width: 100%; height: 100%; object-fit: contain; }
+
 /* ---------------------------------------------------------------- 店家 chip */
 
 /* 一般超市與亞洲超市分兩列。
@@ -394,7 +440,7 @@ i.en {
   display: block; padding: 10px 18px 0;
   font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: .03em;
 }
-.storegroup-label .en { font-size: 10px; }
+.storegroup-label .en { font-size: 11px; }
 .storegroup .storebar { border-bottom: 0; padding-top: 8px; padding-bottom: 10px; }
 
 .storebar {
@@ -409,7 +455,7 @@ i.en {
   padding: 9px 14px; border-radius: 999px;
   border: 1px solid var(--line); background: var(--raised);
   font-size: 14px; font-weight: 600; white-space: nowrap;
-  min-height: 44px;
+  min-height: var(--tap);
   display: inline-flex; align-items: center; gap: 7px;
 }
 .chip .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
@@ -440,7 +486,7 @@ i.en {
 /* 自訂店家的配色選擇 */
 .swatches { display: flex; flex-wrap: wrap; gap: 10px; }
 .swatch-btn {
-  width: 44px; height: 44px; border-radius: 50%;
+  width: var(--tap); height: var(--tap); border-radius: 50%;
   border: 2px solid transparent;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .12);
 }
@@ -480,12 +526,13 @@ button.rankrow.best:active { background: var(--ok-weak); filter: brightness(.97)
 .tag {
   display: inline-block; margin-left: 6px;
   padding: 1px 6px; border-radius: 4px;
-  font-size: 10px; font-weight: 650; letter-spacing: .02em;
+  font-size: 11px; font-weight: 650; letter-spacing: .02em;
   vertical-align: 1px;
 }
 .tag.promo { background: var(--accent-weak); color: var(--accent-ink); }
 .tag.old   { background: var(--line); color: var(--muted); }
 .tag.win   { background: var(--ok); color: #fff; }
+.tag.grp   { background: var(--line-soft); color: var(--muted); font-weight: 600; }
 
 /* ---------------------------------------------------------------- 面板 / 表單 */
 
@@ -497,20 +544,69 @@ button.rankrow.best:active { background: var(--ok-weak); filter: brightness(.97)
 }
 @keyframes slideUp { from { transform: translateY(100%); } }
 
+/* 上面只有標題；所有按鈕都在底部那一條（單手按得到） */
 .sheet-head {
+  display: flex; align-items: center;
+  padding: 14px 18px 12px; border-bottom: 1px solid var(--line-soft); flex: none;
+  padding-top: calc(14px + env(safe-area-inset-top, 0px));
+}
+.sheet-head h2 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+.sheet-body { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 20px; }
+
+.sheet-foot {
+  flex: none; display: flex; gap: 8px;
+  padding: 10px 14px calc(10px + var(--safe-b));
+  border-top: 1px solid var(--line); background: var(--bg);
+}
+.btn-foot {
+  flex: 1; min-width: 0; min-height: var(--tap);
+  padding: 0 10px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--raised);
+  font-size: 15px; font-weight: 600; white-space: nowrap;
+}
+.btn-foot:active { filter: brightness(.95); }
+.btn-foot.primary { flex: 1.6; background: var(--accent-ink); border-color: var(--accent-ink); color: #fff; font-weight: 700; }
+
+/* 從底部滑上來的選單 */
+.menu-wrap { position: fixed; inset: 0; z-index: 120; }
+.menu-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, .45); animation: fadeIn .15s ease-out; }
+.menu {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  max-height: 82dvh; overflow-y: auto;
+  background: var(--bg); border-radius: 16px 16px 0 0;
+  padding: 8px 0 calc(8px + var(--safe-b));
+  animation: slideUp .2s ease-out;
+}
+.menu-group { padding: 14px 20px 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.menu-row {
   display: flex; align-items: center; gap: 12px;
-  padding: 10px 14px; border-bottom: 1px solid var(--line-soft); flex: none;
+  width: 100%; min-height: 52px; padding: 0 20px;
+  text-align: left; font-size: 16px; color: var(--text);
 }
-.sheet-head .x { font-size: 24px; width: var(--tap); height: var(--tap); color: var(--muted); }
-.sheet-head h2 { margin: 0; font-size: 16px; font-weight: 650; }
-.sheet-head .spacer { flex: 1; }
-.sheet-head .go {
-  padding: 9px 16px; border-radius: 999px;
-  background: var(--accent-ink); color: #fff; font-size: 14px; font-weight: 650;
-  min-height: 44px;
+.menu-row:active { background: var(--raised); }
+.menu-row.big { min-height: 60px; font-size: 17px; font-weight: 600; }
+.menu-row svg { flex: none; color: var(--accent-ink); }
+.menu-row .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.menu-row.on { font-weight: 700; }
+.menu-row .check { margin-left: auto; color: var(--accent-ink); font-weight: 700; }
+.menu-row.add { color: var(--muted); font-size: 15px; }
+.menu-row.cancel {
+  justify-content: center; margin-top: 6px;
+  border-top: 8px solid var(--raised); color: var(--muted); font-weight: 600;
 }
-.sheet-head .go[disabled] { background: var(--line); color: var(--faint); }
-.sheet-body { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: calc(28px + var(--safe-b)); }
+@keyframes fadeIn { from { opacity: 0; } }
+
+/* 記價表單裡不常動的欄位 */
+details.more { border-top: 1px solid var(--line-soft); }
+details.more > summary {
+  display: flex; align-items: center; gap: 6px;
+  min-height: var(--tap); padding: 0 18px;
+  font-size: 14px; color: var(--muted); cursor: pointer; list-style: none;
+}
+details.more > summary::-webkit-details-marker { display: none; }
+details.more > summary::before { content: "＋"; color: var(--faint); }
+details.more[open] > summary::before { content: "－"; }
+.row .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 6px; }
 
 .rows { border-top: 1px solid var(--line); }
 .row {
@@ -526,14 +622,17 @@ button.rankrow.best:active { background: var(--ok-weak); filter: brightness(.97)
 .row.danger .k { color: var(--danger); }
 .row.block { display: block; }
 
+/* 16px 不是隨便選的：iPhone 上輸入框字小於 16px，一點下去整頁會自動放大。
+   以前靠 viewport 的 maximum-scale=1 壓住，但那同時讓安卓完全不能雙指放大
+   （iPhone 會無視這個設定，安卓會照做）。改字級，兩邊都不用鎖。 */
 .row .inp, .row .sel {
-  border: 0; background: none; font-size: 15px; color: var(--text);
+  border: 0; background: none; font-size: 16px; color: var(--text);
   text-align: right; margin-left: auto; max-width: 62%;
   padding: 6px 0; min-height: 34px;
 }
 .row .inp.grow { flex: 1; max-width: none; }
 .row .inp.qty {
-  min-height: 44px; text-align: center; padding: 0 8px;
+  min-height: var(--tap); text-align: center; padding: 0 8px;
   border: 1px solid var(--line); border-radius: 8px; background: var(--raised);
 }
 .row .sel {
@@ -557,7 +656,9 @@ button.rankrow.best:active { background: var(--ok-weak); filter: brightness(.97)
 .price-area .big-input:focus { outline: 0; border-bottom: 2px solid var(--accent); }
 .price-area .big-input::-webkit-outer-spin-button,
 .price-area .big-input::-webkit-inner-spin-button { appearance: none; margin: 0; }
-.unit-hint { padding: 8px 20px 0; font-size: 13px; color: var(--muted); text-align: right; min-height: 24px; }
+.unit-hint { padding: 8px 20px 12px; font-size: 16px; color: var(--text); text-align: right; min-height: 36px; }
+.unit-hint b { color: var(--accent-ink); font-weight: 700; }
+.unit-hint .twd { font-size: 13px; color: var(--faint); }
 
 /* ---------------------------------------------------------------- 照片 */
 
@@ -587,7 +688,7 @@ button.rankrow.best:active { background: var(--ok-weak); filter: brightness(.97)
 .btn-small {
   padding: 8px 14px; border-radius: 999px;
   border: 1px solid var(--line); background: var(--raised);
-  font-size: 13px; font-weight: 600; min-height: 44px;
+  font-size: 13px; font-weight: 600; min-height: var(--tap);
 }
 .btn-small.primary { background: var(--accent-ink); border-color: var(--accent-ink); color: #fff; }
 .btn-small[disabled] { opacity: .5; }
@@ -600,7 +701,7 @@ button.rankrow.best:active { background: var(--ok-weak); filter: brightness(.97)
 .chart { margin: 0; padding: 6px 18px 4px; }
 .chart-svg { display: block; width: 100%; height: 150px; overflow: visible; }
 .chart .grid { stroke: var(--line-soft); stroke-width: 1; }
-.chart .tick { fill: var(--faint); font-size: 10px; }
+.chart .tick { fill: var(--faint); font-size: 11px; }
 .chart .dot  { fill: var(--accent); }
 .chart .seg  { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
@@ -656,7 +757,11 @@ button.rankrow.best:active { background: var(--ok-weak); filter: brightness(.97)
     animation: fadeIn .14s ease-out;
   }
   @keyframes fadeIn { from { opacity: 0; } }
+  .menu { max-width: 460px; margin: 0 auto; }
   .fab:hover { filter: brightness(1.06); }
   .itemrow:hover, .row:hover, .rankrow:hover { background: var(--raised); }
   .icon-btn:hover { background: var(--raised); }
 }
+
+/* 記價表單的店家欄沒有 gap，字章跟店名之間自己留空 */
+.row .sbadge { margin-right: 6px; vertical-align: middle; }

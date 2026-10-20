@@ -6,11 +6,13 @@
 import * as db from "./db.js";
 import * as u from "./units.js";
 import { GROUPS, PALETTE, normGroup, allStores, customStores, setCustomStores,
-         storeById, storeName, storeColor, storeGroup, storesOfGroup, groupById } from "./stores.js";
+         storeById, storeName, storeColor, storeGroup, storesOfGroup, groupById,
+         storeLogo, storeMark, inkOn } from "./stores.js";
 import { bi, bi1, biText, zh, en, plain, CATEGORIES, category } from "./i18n.js";
 import * as xport from "./export.js";
 import * as fx from "./fx.js";
 import { EMOJI_GROUPS, guess, guessEmoji, guessCategory } from "./emoji.js";
+import { PRESETS } from "./presets.js";
 
 const app = document.getElementById("app");
 
@@ -24,9 +26,13 @@ const state = {
   lists: [],
   list_items: [],
   stores: [],
+  item_views: [],
+  storeFocus: null,   // 店家頁目前展開哪一家；null = 總覽
   listId: db.DEFAULT_LIST_ID,
   showTwd: true,
   query: "",
+  homeSort: "cat",     // 首頁排法：cat 照分類分段／recent 最近碰過／new 最近新增
+  homeOrder: null,     // 最近碰過的順序快照，見 homeList()
   commonOnly: false,
   lastStore: "sainsburys",
 };
@@ -78,33 +84,40 @@ function rankItem(itemId) {
   const rows = [];
   for (const s of allStores()) {
     const hit = bestAtStore(itemId, s.id);
-    if (hit) rows.push({ store: s, ...hit, fresh: u.freshness(hit.price.observed_on) });
+    if (hit) rows.push({ store: s, ...hit, fresh: u.freshness(hit.price.observed_on, { promo: !!hit.price.is_promo }) });
   }
   rows.sort((a, b) => a.unit - b.unit);
   return rows;
 }
 
-// 依組別切開的排行。
+
+// 每個品項「最近一次被碰到」的時間：點開看過、剛建立、剛記（或改）了價格，取最新的。
 //
-// 為什麼不混在一起排：一般超市與亞洲超市不是同一個貨架上的競爭關係。
-// 醬油在 Aldi 買不到，牛奶你也不會特地去 Tian Tian 買。混排會得到
-// 「Tian Tian 的米比 Aldi 貴」這種正確但沒有用的結論。
-function rankByGroup(itemId) {
-  const all = rankItem(itemId);
-  return GROUPS
-    .map((g) => ({ group: g, rows: all.filter((r) => r.store.group === g.id) }))
-    .filter((g) => g.rows.length);
+// 首頁要把你正在處理的東西放最上面。只看記價日期的話，你昨天點開研究了半天的東西
+// 今天還是沉在下面；只看「看過」的話，剛新增的品項又會找不到。三個都算才對。
+//
+// 用 updated_at 而不是 observed_on：observed_on 是貨架上的日期，
+// 回家批次補登上週的照片時它是舊的，但那筆明明是你剛剛才輸入的。
+function recentMap() {
+  const at = new Map();
+  const bump = (id, t) => { if (id && t && t > (at.get(id) || "")) at.set(id, t); };
+
+  for (const i of state.items) bump(i.id, i.created_at);
+  for (const v of state.item_views) bump(v.id, v.viewed_at);
+
+  const itemOfProduct = new Map(state.products.map((p) => [p.id, p.item_id]));
+  for (const pr of state.prices) bump(itemOfProduct.get(pr.product_id), pr.updated_at);
+  return at;
 }
 
-// 品項最後一次被記到價格是什麼時候，用來排「最近在看的東西」
-function lastSeenOf(itemId) {
-  let latest = "";
-  for (const p of productsOfItem(itemId)) {
-    for (const pr of state.prices) {
-      if (pr.product_id === p.id && pr.observed_on > latest) latest = pr.observed_on;
-    }
-  }
-  return latest;
+// 記下「看過」。一個品項一列（id = item_id），所以跨裝置自動就是最後一次看的時間。
+// 一分鐘內重複點開不再寫，免得來回切換時每一下都產生一筆要同步的資料。
+async function markViewed(itemId) {
+  const prev = state.item_views.find((v) => v.id === itemId);
+  const now = new Date().toISOString();
+  if (prev && Date.parse(now) - Date.parse(prev.viewed_at) < 60000) return;
+  const row = await db.put("item_views", { ...(prev || {}), id: itemId, viewed_at: now, deleted_at: null });
+  state.item_views = [...state.item_views.filter((v) => v.id !== itemId), row];
 }
 
 // 品項的計價基準決定顯示單位：g → 每公斤，ml → 每公升，each → 每個
@@ -131,6 +144,16 @@ function twd(pence, { prefix = " ≈ " } = {}) {
   return label ? prefix + label : "";
 }
 
+// 店家圖示（商標圖或品牌色字章）。size：sm 用在膠囊與選單裡，lg 用在店家頁標題。
+function storeBadge(store, size = "") {
+  if (!store) return "";
+  const logo = storeLogo(store);
+  const cls = `sbadge${size ? " " + size : ""}${store.mark && store.mark.length > 1 ? " wide" : ""}`;
+  return logo
+    ? `<span class="${cls} logo" aria-hidden="true"><img src="${esc(logo)}" alt=""></span>`
+    : `<span class="${cls}" aria-hidden="true" style="background:${store.color};color:${inkOn(store.color)}">${esc(storeMark(store))}</span>`;
+}
+
 // 品項圖示：自己挑的 → 名稱猜的 → 分類的。
 //
 // 分類只有十幾個但你買的東西有幾百種，一對一永遠對不上 ——
@@ -141,10 +164,10 @@ const itemEmoji = (item) => !item ? "•"
 // ---------------------------------------------------------------- 資料載入
 
 async function reload() {
-  const [stores, items, products, prices, photos, lists, list_items] = await Promise.all(
-    ["stores", "items", "products", "prices", "photos", "lists", "list_items"].map((t) => db.getAll(t))
+  const [stores, items, products, prices, photos, lists, list_items, item_views] = await Promise.all(
+    ["stores", "items", "products", "prices", "photos", "lists", "list_items", "item_views"].map((t) => db.getAll(t))
   );
-  Object.assign(state, { stores, items, products, prices, photos, lists, list_items });
+  Object.assign(state, { stores, items, products, prices, photos, lists, list_items, item_views });
 
   // stores.js 是同步的（畫面到處都在呼叫 storeName），所以自訂店家要先推進去，
   // 之後任何 render 才查得到名字與顏色
@@ -159,7 +182,7 @@ async function reload() {
 
 let toastTimer = null;
 
-function toast(message, { action = null, actionLabel = "復原 Undo", warn = false, ms = 5000 } = {}) {
+function toast(message, { action = null, actionLabel = "復原", warn = false, ms = 5000 } = {}) {
   document.querySelector(".toast")?.remove();
   clearTimeout(toastTimer);
 
@@ -181,21 +204,39 @@ function toast(message, { action = null, actionLabel = "復原 Undo", warn = fal
 
 const openSheets = [];
 
-function sheet(titleHtml, bodyHtml, { saveLabel = null, extraHead = "" } = {}) {
+// 所有按鈕都在底部那一條：單手拿手機時，右上角的「儲存」跟左上角的「✕」
+// 都要換手才按得到。上面只留標題。
+//   saveLabel —— 有的話最右邊是主要按鈕，左邊是「取消」
+//   actions   —— 夾在中間的其他按鈕（品項明細的「編輯」「加入清單」）
+function sheet(titleHtml, bodyHtml, { saveLabel = null, actions = "", closeLabel = null } = {}) {
   const el = document.createElement("div");
   el.className = "sheet";
   el.innerHTML = `
-    <div class="sheet-head">
-      <button class="x" data-close aria-label="${plain("close")}">✕</button>
-      <h2>${titleHtml}</h2>
-      <div class="spacer"></div>
-      ${extraHead}
-      ${saveLabel ? `<button class="go" data-save>${saveLabel}</button>` : ""}
-    </div>
-    <div class="sheet-body">${bodyHtml}</div>`;
+    <div class="sheet-head"><h2>${titleHtml}</h2></div>
+    <div class="sheet-body">${bodyHtml}</div>
+    <div class="sheet-foot">
+      <button class="btn-foot" data-close>${esc(closeLabel || (saveLabel ? "取消" : "關閉"))}</button>
+      ${actions}
+      ${saveLabel ? `<button class="btn-foot primary" data-save>${saveLabel}</button>` : ""}
+    </div>`;
   document.body.appendChild(el);
 
   el.querySelector("[data-close]").onclick = () => closeSheet(el);
+  openSheets.push(el);
+  pushSheetState();
+  return el;
+}
+
+// 從底部滑上來的選單（記價方式、選店家）。不蓋滿整個畫面，點旁邊的暗處就關掉。
+// 跟 sheet 共用同一套返回鍵處理。
+function menuSheet(bodyHtml) {
+  const el = document.createElement("div");
+  el.className = "menu-wrap";
+  el.innerHTML = `<div class="menu-backdrop" data-close></div>
+    <div class="menu" role="dialog">${bodyHtml}
+      <button class="menu-row cancel" data-close>取消</button></div>`;
+  document.body.appendChild(el);
+  el.querySelectorAll("[data-close]").forEach((b) => { b.onclick = () => closeSheet(el); });
   openSheets.push(el);
   pushSheetState();
   return el;
@@ -221,11 +262,45 @@ function closeSheet(el) {
   history.back();
 }
 
+// 安卓返回鍵一層一層退：面板 → 店家展開 → 其他分頁回首頁 → 首頁再按一次才離開。
+//
+// 以前切分頁不留紀錄，人在「店家」或「紀錄」頁按返回，App 就整個關掉了。
+// 瀏覽紀錄由下往上長這樣：[進來] [防誤觸] [分頁] [店家展開] [面板…]
+//   tabEntry  —— 不在首頁時多一筆，返回就是回首頁；分頁之間切換不再推
+//   trapArmed —— 首頁底下墊一筆，返回先提示「再按一次離開」而不是直接關掉。
+//                它要在第一次觸碰時才推：Chrome 會跳過沒有使用者動作就推的紀錄，
+//                開機時推了等於沒推。
+let tabEntry = false;
+let trapArmed = false;
+
+document.addEventListener("pointerdown", () => {
+  if (trapArmed || tabEntry || state.storeFocus || openSheets.length) return;
+  history.pushState({ trap: true }, "");
+  trapArmed = true;
+}, { capture: true });
+
 window.addEventListener("popstate", () => {
   if (pendingBacks > 0) { pendingBacks -= 1; return; }
   const el = openSheets.pop();
-  if (el) el.remove();
+  if (el) { el.remove(); return; }
+  // 店家頁展開某一家時也推了一筆紀錄：安卓的返回鍵／手勢要回到總覽，不是離開 App
+  if (state.storeFocus) { state.storeFocus = null; render(); return; }
+  if (tabEntry) { tabEntry = false; state.route = "compare"; state.query = ""; state.homeOrder = null; render(); return; }
+  if (trapArmed) { trapArmed = false; toast("再按一次返回就會離開", { ms: 2500 }); }
 });
+
+// 切分頁。要退掉的紀錄一次用 go(-n) 退完 —— 連叫兩次 back() 會被瀏覽器合併成一次。
+function goRoute(route) {
+  let backs = 0;
+  if (state.storeFocus) { state.storeFocus = null; backs += 1; }
+  if (route === "compare" && tabEntry) { tabEntry = false; backs += 1; }
+  if (backs) { pendingBacks += 1; history.go(-backs); }
+  if (route !== "compare" && !tabEntry) { history.pushState({ tab: true }, ""); tabEntry = true; }
+  state.route = route;
+  state.query = "";
+  state.homeOrder = null;   // 回到首頁時「最近看過」重新排一次
+  render();
+}
 
 // ---------------------------------------------------------------- 照片
 //
@@ -304,7 +379,7 @@ async function nextInQueue() {
     const n = queue.ids.length;
     await clearQueue();
     await refresh();
-    if (n) toast(`批次匯入完成，共 ${n} 張 Batch import done`);
+    if (n) toast(`批次匯入完成，共 ${n} 張`);
     return;
   }
   openRecord({ photoId: queue.ids[queue.index], fromQueue: true });
@@ -320,7 +395,7 @@ async function openBatchImport() {
 
   const ids = [];
   for (let i = 0; i < files.length; i++) {
-    progress.innerHTML = `處理第 ${i + 1} / ${files.length} 張<br><i class="en">Processing ${i + 1} of ${files.length}</i>`;
+    progress.innerHTML = `處理第 ${i + 1} / ${files.length} 張`;
     try {
       const { blob, width, height } = await shrink(files[i]);
       const id = db.uuid();
@@ -338,7 +413,7 @@ async function openBatchImport() {
 
   closeSheet(el);
 
-  if (!ids.length) return toast("這些檔案都讀不進來 Could not read any of these", { warn: true });
+  if (!ids.length) return toast("這些檔案都讀不進來", { warn: true });
 
   queue.ids = ids;
   queue.index = 0;
@@ -401,12 +476,12 @@ function openRecord({ itemId = null, storeId = null, photoId = null, fromQueue =
 
   const title = editing ? bi("edit")
     : fromQueue
-      ? `<span class="bi"><b>${esc(zh("record"))} ${queue.index + 1}/${queue.ids.length}</b><i>${esc(en("batch"))}</i></span>`
+      ? `${esc(zh("batch"))} ${queue.index + 1}/${queue.ids.length}`
       : bi("record");
 
   const el = sheet(title, recordBody(draft), {
     saveLabel: bi1("save"),
-    extraHead: fromQueue ? `<button class="btn-small" data-skip>${bi1("skip")}</button>` : "",
+    actions: fromQueue ? `<button class="btn-foot" data-skip>${bi1("skip")}</button>` : "",
   });
   wireRecord(el, draft);
 
@@ -468,6 +543,37 @@ function syncProductFields(body, draft) {
   draft.size_unit = body.querySelector("[data-f='size_unit']").value;
 }
 
+// 標籤（或你自己選的單位）跟品項的計價基準對不上時怎麼辦。
+//
+// 以前的做法是讓單位選單只剩品項允許的那幾個，選單的值就默默變成 g ——
+// 標籤寫「10 each」的蛋，就這樣被存成 10 g，算出 £400/kg。
+// 這種錯最糟：數字看起來很合理，畫面上完全看不出來。
+//
+// 現在的規則：
+//   品項底下還沒有任何商品 → 基準還沒被用過，直接改成標籤的（多半是剛建的品項，
+//                           建立時留著預設的「重量」沒改）
+//   已經有商品            → 不能改（見 openItemEditor 的鎖），清掉容量讓你自己看，
+//                           並且明講對不上，不要替你換算
+// 回傳 "switched" / "conflict" / null（沒事）。
+async function reconcileUnit(draft) {
+  const item = draft.item_id ? itemById(draft.item_id) : null;
+  const want = draft._labelBase || (draft._unitTouched && draft.size_unit ? u.baseOfUnit(draft.size_unit) : null);
+  if (!item || !want || want === item.base_unit) return null;
+
+  if (!productsOfItem(item.id).length) {
+    const saved = await db.put("items", { ...item, base_unit: want });
+    state.items = state.items.map((i) => (i.id === saved.id ? saved : i));
+    toast(`「${item.name_zh || item.name_en}」改成${want === "each" ? "按個" : want === "ml" ? "按容量" : "按重量"}計價，跟標籤一致`);
+    return "switched";
+  }
+
+  draft.size = "";
+  draft.size_unit = "";
+  draft._prefilled = false;
+  toast(`標籤是${want === "each" ? "按個" : want === "ml" ? "按容量" : "按重量"}計價，但「${item.name_zh || item.name_en}」不是 —— 容量請自己確認`, { warn: true, ms: 8000 });
+  return "conflict";
+}
+
 function unitOptions(draft) {
   const item = draft.item_id ? itemById(draft.item_id) : null;
   // 選了品項就只給同一個基準的單位。
@@ -478,44 +584,66 @@ function unitOptions(draft) {
     : ["g", "kg"];
 
   return allowed.map((x) =>
-    `<option value="${x}"${draft.size_unit === x ? " selected" : ""}>${x === "each" ? "個 each" : x}</option>`
+    `<option value="${x}"${draft.size_unit === x ? " selected" : ""}>${x === "each" ? "個" : x}</option>`
   ).join("");
 }
 
-// 抽出來是為了「當場新增店家」之後可以只重畫這一塊，不用整張表單重建
-// （重建會把使用者已經打好的價格、容量全部弄丟）。
-function storeGroupsHtml(draft) {
-  // 每一組各自一列。亞洲超市或小店混在 12 家英國連鎖後面的話，每次都要橫捲到底才找得到。
-  return GROUPS.map((g) => `
-    <div class="storegroup">
-      <span class="storegroup-label">${g.icon} ${esc(g.zh)} <i class="en">${esc(g.en)}</i></span>
-      <div class="storebar" data-storebar>
-        ${storesOfGroup(g.id).map((s) =>
-          `<button class="chip${draft.store_id === s.id ? " on" : ""}" data-store="${s.id}">
-             <span class="dot" style="background:${s.color}"></span>${esc(s.name)}</button>`).join("")}
-        <button class="chip ghost" data-new-store="${g.id}"
-          aria-label="${plain("newStore")}">＋</button>
-      </div>
-    </div>`).join("");
+// 選店家：從底部滑上來的清單，一組一段。
+//
+// 原本三組店家各一排 chip 擺在記價表單最上面，佔掉半個畫面，而且多半用不到 ——
+// 你通常整趟都在同一家店，預設就是上次那家。要換的時候再點開這份清單。
+function openStorePicker(current, onPick) {
+  // 最上面放「最近去過」：內建連鎖就有十幾家，真正會去的只有幾家
+  const lastAt = new Map();
+  for (const pr of state.prices) {
+    const p = productById(pr.product_id);
+    if (p && (pr.observed_on > (lastAt.get(p.store_id) || ""))) lastAt.set(p.store_id, pr.observed_on);
+  }
+  const recent = allStores().filter((s) => lastAt.has(s.id))
+    .sort((a, b) => (lastAt.get(a.id) < lastAt.get(b.id) ? 1 : -1)).slice(0, 5);
+  const row = (s) => `
+      <button class="menu-row${current === s.id ? " on" : ""}" data-store="${esc(s.id)}">
+        ${storeBadge(s, "sm")}<span>${esc(s.name)}</span>
+        ${current === s.id ? `<span class="check">✓</span>` : ""}</button>`;
+
+  const el = menuSheet((recent.length ? `<div class="menu-group">最近去過</div>${recent.map(row).join("")}` : "")
+    + GROUPS.map((g) => `
+    <div class="menu-group">${g.icon} ${esc(g.zh)}</div>
+    ${storesOfGroup(g.id).map(row).join("")}
+    <button class="menu-row add" data-new-store="${g.id}">＋ ${esc(zh("newStore"))}</button>`).join(""));
+
+  el.querySelector(".menu").addEventListener("click", (e) => {
+    const pick = e.target.closest("[data-store]");
+    const add = e.target.closest("[data-new-store]");
+    if (pick) { closeSheet(el); onPick(pick.dataset.store); }
+    // 站在清單裡沒有的小店，當場加，存完直接選中它
+    if (add) { closeSheet(el); openStoreEditor(null, (saved) => onPick(saved.id), add.dataset.newStore); }
+  });
 }
 
+function storeRowHtml(storeId) {
+  const s = storeId ? storeById(storeId) : null;
+  return s ? `${storeBadge(s, "sm")}${esc(s.name)} ›`
+    : `<span style="color:var(--accent-ink)">選店家 ›</span>`;
+}
+
+// 記價表單 = 一張確認卡。
+//
+// 順序照「站在貨架前」的思考：照片 → 價格 → 這包多大、每公斤多少 → 是什麼、在哪家。
+// 貨架名稱、品牌、特價、日期大部分時候不用動（AI 讀了、日期是今天），收進「更多」。
 function recordBody(draft) {
   const item = draft.item_id ? itemById(draft.item_id) : null;
 
   return `
-    <div class="storegroups">${storeGroupsHtml(draft)}</div>
-
     <div class="photo-slot" data-photo>
       <div class="photo-sources">
         <button class="photo-drop" data-act="take-photo">
-          <span class="ic">📷</span><span>${bi1("takePhoto")}</span>
+          <span class="ic">${ICON.camera}</span><span>${bi1("takePhoto")}</span>
         </button>
         <button class="photo-drop" data-act="choose-photo">
-          <span class="ic">🖼</span><span>${bi1("choosePhoto")}</span>
+          <span class="ic">${ICON.image}</span><span>${bi1("choosePhoto")}</span>
         </button>
       </div>
-      ${draft._fromQueue ? "" : `<button class="btn-small batch-link" data-act="batch">
-        📚 ${bi1("batch")}</button>`}
     </div>
 
     <div class="price-area">
@@ -531,17 +659,10 @@ function recordBody(draft) {
         <span class="v" data-item-label>${item ? biText(item.name_zh, item.name_en) : `<span style="color:var(--accent-ink)">${bi1("pickItem")} ›</span>`}</span>
       </button>
 
-      <label class="row">
-        <span class="k">${bi1("shelfName")}</span>
-        <input class="inp grow" data-f="name_en" type="text" placeholder="Whole Milk 2L"
-               value="${esc(draft.name_en)}" autocomplete="off">
-      </label>
-
-      <label class="row">
-        <span class="k">${bi1("brand")}</span>
-        <input class="inp grow" data-f="brand" type="text" placeholder="${plain("ownLabel")}"
-               value="${esc(draft.brand)}" autocomplete="off">
-      </label>
+      <button class="row" data-act="pick-store">
+        <span class="k">${bi1("store")}</span>
+        <span class="v" data-store-label>${storeRowHtml(draft.store_id)}</span>
+      </button>
 
       <div class="row">
         <span class="k">${bi1("size")}</span>
@@ -549,47 +670,47 @@ function recordBody(draft) {
                style="max-width:5.5em" value="${esc(draft.size)}">
         <select class="sel" data-f="size_unit" style="max-width:6em">${unitOptions(draft)}</select>
       </div>
-
-      <label class="row">
-        <span class="k">${bi1("promo")}</span>
-        <input class="chk" data-f="is_promo" type="checkbox"${draft.is_promo ? " checked" : ""}>
-      </label>
-
-      <label class="row${draft.is_promo ? "" : " hidden"}" data-promo-row>
-        <span class="k">${bi1("promoNote")}</span>
-        <input class="inp grow" data-f="promo_note" type="text" placeholder="Nectar price"
-               value="${esc(draft.promo_note)}" autocomplete="off">
-      </label>
-
-      <label class="row">
-        <span class="k">${bi1("branch")}</span>
-        <input class="inp grow" data-f="branch" type="text" placeholder="Camden"
-               value="${esc(draft.branch)}" autocomplete="off">
-      </label>
-
-      <label class="row">
-        <span class="k">${bi1("observedOn")}</span>
-        <input class="inp" data-f="observed_on" type="date" value="${esc(draft.observed_on)}">
-      </label>
     </div>
 
-    <p class="note">
-      <b>沒填容量也存得起來</b> Size can be left blank —— 但沒有容量就算不出單價，
-      這筆就只會出現在紀錄裡，不會參與比價。<br>
-      Without a size we cannot work out a unit price, so it will not join the comparison.
-      ${draft._editId ? `<br><br><b>改容量會連帶修正單價</b> —— 這筆紀錄會重新掛到符合新規格的商品底下，
-      同一家店同一個容量的其他紀錄不受影響。<br>
-      <i class="en">Changing the size re-files this observation under the matching product.</i>` : ""}
-    </p>
-
-    ${draft._editId ? `
+    <details class="more"${draft.is_promo ? " open" : ""}>
+      <summary>更多：貨架名稱、品牌、特價、日期</summary>
       <div class="rows">
-        ${draft.label_unit_price ? `<div class="row"><span class="k">標籤上寫 <i class="en">On the label</i></span>
+        <label class="row">
+          <span class="k">${bi1("shelfName")}</span>
+          <input class="inp grow" data-f="name_en" type="text" placeholder="Whole Milk 2L"
+                 value="${esc(draft.name_en)}" autocomplete="off">
+        </label>
+        <label class="row">
+          <span class="k">${bi1("brand")}</span>
+          <input class="inp grow" data-f="brand" type="text" placeholder="${plain("ownLabel")}"
+                 value="${esc(draft.brand)}" autocomplete="off">
+        </label>
+        <label class="row">
+          <span class="k">${bi1("promo")}</span>
+          <input class="chk" data-f="is_promo" type="checkbox"${draft.is_promo ? " checked" : ""}>
+        </label>
+        <label class="row${draft.is_promo ? "" : " hidden"}" data-promo-row>
+          <span class="k">${bi1("promoNote")}</span>
+          <input class="inp grow" data-f="promo_note" type="text" placeholder="Nectar price"
+                 value="${esc(draft.promo_note)}" autocomplete="off">
+        </label>
+        <label class="row">
+          <span class="k">${bi1("branch")}</span>
+          <input class="inp grow" data-f="branch" type="text" placeholder="Camden"
+                 value="${esc(draft.branch)}" autocomplete="off">
+        </label>
+        <label class="row">
+          <span class="k">${bi1("observedOn")}</span>
+          <input class="inp" data-f="observed_on" type="date" value="${esc(draft.observed_on)}">
+        </label>
+        ${draft._editId && draft.label_unit_price ? `<div class="row"><span class="k">標籤上寫</span>
           <span class="v num">${esc(draft.label_unit_price)}</span></div>` : ""}
-        <div class="row"><span class="k">來源 <i class="en">Source</i></span>
-          <span class="v">${draft.source === "ai" ? "AI 辨識 + 人工確認" : "手動輸入 manual"}</span></div>
+        ${draft._editId ? `<div class="row"><span class="k">來源</span>
+          <span class="v">${draft.source === "ai" ? "AI 辨識 + 人工確認" : "手動輸入"}</span></div>` : ""}
       </div>
-      <div class="rows"><button class="row danger" data-del-price>
+    </details>
+
+    ${draft._editId ? `<div class="rows"><button class="row danger" data-del-price>
         <span class="k">${bi1("delete")}</span></button></div>` : ""}`;
 }
 
@@ -603,12 +724,14 @@ function wireRecord(el, draft) {
     const item = draft.item_id ? itemById(draft.item_id) : null;
     const size = u.toBase(draft.size, draft.size_unit);
 
-    if (pence === null) { hint.textContent = ""; return; }
-    const money = esc(u.formatPence(pence)) + `<i class="en">${esc(twd(pence))}</i>`;
-    if (!size || !item) { hint.innerHTML = `<span style="color:var(--faint)">${money}</span>`; return; }
+    // 這一行就是記價的目的：這包多大、換算起來每公斤／每個多少
+    const sizeText = u.formatSize(draft.size, draft.size_unit);
+    if (pence === null) { hint.innerHTML = sizeText ? `<span style="color:var(--faint)">${esc(sizeText)}</span>` : ""; return; }
+    const money = `<span class="twd">${esc(twd(pence, { prefix: "≈ " }))}</span>`;
+    if (!size || !item) { hint.innerHTML = `<span style="color:var(--faint)">${esc(sizeText || "填份量才算得出單價")}</span> ${money}`; return; }
 
     const unit = pence / size;
-    hint.innerHTML = `${money} · <b>${esc(u.formatUnitPrice(unit, item.base_unit))}</b>`;
+    hint.innerHTML = `${esc(sizeText)} · <b>${esc(u.formatUnitPrice(unit, item.base_unit))}</b> ${money}`;
   };
 
   priceInput.oninput = refreshHint;
@@ -617,35 +740,19 @@ function wireRecord(el, draft) {
   // 你自己打過的東西，不該因為多按一下店家就被蓋掉。
   const canPrefill = () => draft.item_id && (draft._prefilled || (!draft.name_en && !draft.size));
 
-  // 店家 chip（每一組共用同一個處理，所以綁在外層容器上）
-  body.querySelector(".storegroups").onclick = (e) => {
-    const btn = e.target.closest("[data-store]");
-    if (!btn) return;
-    draft.store_id = btn.dataset.store;
-    state.lastStore = draft.store_id;
-    db.setMeta("last_store", draft.store_id);
-    body.querySelectorAll("[data-store]").forEach((b) => b.classList.toggle("on", b.dataset.store === draft.store_id));
-
-    // 換店家也要重帶規格。少了這一步，「先選店再選品項」就會存出一筆
-    // 沒有容量的商品，算不出單價，比價時直接消失。
-    if (canPrefill()) { prefillFromLast(draft); syncProductFields(body, draft); }
-    refreshHint();
-    buzz();
-  };
-
-  // 站在一家清單裡沒有的小店，當場加。存完直接選中它，不用再找一次。
-  body.querySelector(".storegroups").addEventListener("click", (e) => {
-    const add = e.target.closest("[data-new-store]");
-    if (!add) return;
-    e.stopPropagation();
-    openStoreEditor(null, async (saved) => {
-      draft.store_id = saved.id;
-      state.lastStore = saved.id;
-      await db.setMeta("last_store", saved.id);
-      body.querySelector(".storegroups").innerHTML = storeGroupsHtml(draft);
+  // 店家：底部選單。換店家也要重帶規格 —— 少了這一步，「先選店再選品項」
+  // 就會存出一筆沒有容量的商品，算不出單價，比價時直接消失。
+  body.querySelector("[data-act='pick-store']").onclick = () => {
+    openStorePicker(draft.store_id, async (storeId) => {
+      draft.store_id = storeId;
+      state.lastStore = storeId;
+      await db.setMeta("last_store", storeId);
+      body.querySelector("[data-store-label]").innerHTML = storeRowHtml(storeId);
+      if (canPrefill()) { prefillFromLast(draft); syncProductFields(body, draft); }
       refreshHint();
-    }, add.dataset.newStore);
-  });
+      buzz();
+    });
+  };
 
   // 一般欄位
   body.querySelectorAll("[data-f]").forEach((input) => {
@@ -654,6 +761,8 @@ function wireRecord(el, draft) {
       draft[key] = input.type === "checkbox" ? input.checked : input.value;
       // 一旦動手改過商品欄位，就不再自動覆蓋
       if (["name_en", "brand", "size", "size_unit"].includes(key)) draft._prefilled = false;
+      // 自己挑過的單位要當真：之後選的品項基準不同時，不能默默換掉它
+      if (key === "size_unit") draft._unitTouched = true;
       if (key === "is_promo") body.querySelector("[data-promo-row]").classList.toggle("hidden", !input.checked);
       if (key === "size" || key === "size_unit") refreshHint();
     };
@@ -666,6 +775,7 @@ function wireRecord(el, draft) {
     openItemPicker(async (item) => {
       draft.item_id = item.id;
       body.querySelector("[data-item-label]").innerHTML = biText(item.name_zh, item.name_en);
+      await reconcileUnit(draft);
       if (canPrefill()) prefillFromLast(draft);
       syncProductFields(body, draft);
       refreshHint();
@@ -678,7 +788,6 @@ function wireRecord(el, draft) {
     if (e.target.closest("[data-act='choose-photo']")) attachPhoto(el, draft, refreshHint, { camera: false });
     if (e.target.closest("[data-act='read-label']"))   readLabel(el, draft, refreshHint);
     if (e.target.closest("[data-act='zoom-photo']"))   showPhoto(draft.photo_id);
-    if (e.target.closest("[data-act='batch']"))        { closeSheet(el); openBatchImport(); }
   };
 
   el.querySelector("[data-skip]")?.addEventListener("click", () => skipQueued(el));
@@ -687,7 +796,7 @@ function wireRecord(el, draft) {
     await deletePrice(draft._editId);
     closeSheet(el);
     await refresh();
-    toast("已刪除 Deleted");
+    toast("已刪除");
   });
 
   el.querySelector("[data-save]").onclick = async () => {
@@ -697,7 +806,20 @@ function wireRecord(el, draft) {
 
   draft.size_unit = body.querySelector("[data-f='size_unit']").value;
   refreshHint();
-  setTimeout(() => priceInput.focus(), 60);
+  // 有照片時 AI 會填價格，先不要叫出鍵盤蓋住半個畫面；手動輸入才直接聚焦
+  if (!draft.photo_id) setTimeout(() => priceInput.focus(), 60);
+}
+
+// 縮圖、存進本機、登記到 photos 表。回傳照片 id。
+async function storePhotoFile(file, storeId = null) {
+  const { blob, width, height } = await shrink(file);
+  const id = db.uuid();
+  await db.savePhotoBlob(id, blob);
+  await db.put("photos", {
+    id, r2_key: `labels/${id}.jpg`, store_id: storeId,
+    taken_at: new Date(file.lastModified || Date.now()).toISOString(), width, height,
+  });
+  return { id, blob };
 }
 
 async function attachPhoto(el, draft, refreshHint, { camera = false } = {}) {
@@ -705,24 +827,46 @@ async function attachPhoto(el, draft, refreshHint, { camera = false } = {}) {
   if (!file) return;
 
   const slot = el.querySelector("[data-photo]");
-  slot.innerHTML = `<div class="ai-note">處理中… Processing…</div>`;
+  slot.innerHTML = `<div class="ai-note">處理中…</div>`;
 
   try {
-    const { blob, width, height } = await shrink(file);
-    const id = db.uuid();
-    await db.savePhotoBlob(id, blob);
-    await db.put("photos", {
-      id, r2_key: `labels/${id}.jpg`, store_id: draft.store_id,
-      taken_at: new Date().toISOString(), width, height,
-    });
-
+    const { id, blob } = await storePhotoFile(file, draft.store_id);
     draft.photo_id = id;
     draft._blobUrl = URL.createObjectURL(blob);
     renderPhotoSlot(el, draft);
     refreshHint();
+    // 拍了照就是要辨識，不用再多按一下「辨識」。編輯時例外（見 attachStoredPhoto）。
+    if (!draft._editId) readLabel(el, draft, refreshHint);
   } catch (err) {
     slot.innerHTML = `<div class="ai-note warn">照片處理失敗 ${esc(err.message)}</div>`;
   }
+}
+
+// 按「記價」先問怎麼記。站在貨架前是拍照，回家補登是從相簿選 ——
+// 兩種都很常見，直接開相機會讓後者每次都要先關掉相機。
+function openRecordMenu() {
+  const el = menuSheet(`
+    <button class="menu-row big" data-m="camera">${ICON.camera}<span>拍標籤</span></button>
+    <button class="menu-row big" data-m="library">${ICON.image}<span>從相簿選</span></button>
+    <button class="menu-row big" data-m="batch">${ICON.stack}<span>一次匯入多張</span></button>
+    <button class="menu-row big" data-m="manual">${ICON.pencil}<span>手動輸入</span></button>`);
+
+  el.querySelector(".menu").addEventListener("click", async (e) => {
+    const m = e.target.closest("[data-m]")?.dataset.m;
+    if (!m) return;
+    closeSheet(el);
+    if (m === "manual") return openRecord();
+    if (m === "batch") return openBatchImport();
+    // pickImage 要在這次點擊裡同步呼叫，iPhone 才肯開相機／相簿
+    const file = await pickImage({ camera: m === "camera" });
+    if (!file) return;
+    try {
+      const { id } = await storePhotoFile(file, state.lastStore);
+      openRecord({ photoId: id });
+    } catch (err) {
+      toast("照片處理失敗 " + err.message, { warn: true });
+    }
+  });
 }
 
 // 貨架標籤上的字本來就小，96px 的縮圖根本讀不出價格。
@@ -731,15 +875,13 @@ function openPhotoViewer(url) {
   const el = document.createElement("div");
   el.className = "sheet viewer";
   el.innerHTML = `
-    <div class="viewer-bar">
-      <button class="x" data-close aria-label="${plain("close")}">✕</button>
-      <div class="spacer"></div>
-      <button class="btn-small" data-zoom>🔍 ${bi1("zoom")}</button>
-    </div>
     <div class="viewer-stage" data-stage>
-      <img src="${esc(url)}" alt="貨架標籤 shelf label">
+      <img src="${esc(url)}" alt="貨架標籤">
     </div>
-    <p class="viewer-hint">點圖片可放大縮小 <i class="en">Tap the image to zoom</i></p>`;
+    <div class="viewer-bar">
+      <button class="btn-foot" data-close>關閉</button>
+      <button class="btn-foot" data-zoom>🔍 ${bi1("zoom")}</button>
+    </div>`;
   document.body.appendChild(el);
 
   const stage = el.querySelector("[data-stage]");
@@ -787,8 +929,8 @@ function renderPhotoSlot(el, draft, { busy = false, message = "" } = {}) {
           ${busy ? bi1("reading") + " …" : "✨ " + bi1("recognise")}
         </button>
         <div class="btn-row">
-          <button class="btn-small" data-act="take-photo">📷 重拍 Retake</button>
-          <button class="btn-small" data-act="choose-photo">🖼 換一張 Change</button>
+          <button class="btn-small" data-act="take-photo">重拍</button>
+          <button class="btn-small" data-act="choose-photo">換一張</button>
         </div>
         ${message ? `<div class="ai-note${message.startsWith("!") ? " warn" : ""}">${esc(message.replace(/^!/, ""))}</div>` : ""}
       </div>
@@ -820,18 +962,18 @@ async function readLabel(el, draft, refreshHint) {
       return;
     }
 
-    applyExtraction(el, draft, out.data);
+    await applyExtraction(el, draft, out.data);
     refreshHint();
 
     const filled = ["price_pence", "name_en", "size"].filter((k) => out.data[k] !== null).length;
-    renderPhotoSlot(el, draft, { message: `已填 ${filled} 個欄位，請核對 Check before saving` });
+    renderPhotoSlot(el, draft, { message: `已填 ${filled} 個欄位，請核對` });
     buzz(20);
   } catch (err) {
     renderPhotoSlot(el, draft, { message: "!" + err.message });
   }
 }
 
-function applyExtraction(el, draft, data) {
+async function applyExtraction(el, draft, data) {
   const body = el.querySelector(".sheet-body");
   const set = (key, value) => {
     if (value === null || value === undefined || value === "") return;
@@ -846,15 +988,23 @@ function applyExtraction(el, draft, data) {
   }
   set("name_en", data.name_en);
   set("brand", data.brand);
-  set("size", data.size !== null ? String(data.size) : null);
+  // 計價基準：標籤上的單價小字最可靠（店家印的），其次是包裝容量的單位
+  draft._labelBase = u.baseFromLabel(data.label_unit_price)
+    || (data.size_unit ? u.baseOfUnit(data.size_unit) : null);
 
-  // 單位要合得上品項的計價基準，合不上就別填，讓人自己選
-  if (data.size_unit) {
+  if (data.size !== null && data.size_unit) {
+    draft.size = String(data.size);
+    draft.size_unit = data.size_unit;
+    draft._prefilled = false;
+  }
+
+  // 已經選好品項的話，先對一次基準：合不上就改品項（還沒用過時）或清掉容量，
+  // 絕對不讓選單把 each 默默變成 g
+  await reconcileUnit(draft);
+  syncProductFields(body, draft);
+  if (draft.size_unit) {
     const select = body.querySelector("[data-f='size_unit']");
-    if ([...select.options].some((o) => o.value === data.size_unit)) {
-      select.value = data.size_unit;
-      draft.size_unit = data.size_unit;
-    }
+    if ([...select.options].some((o) => o.value === draft.size_unit)) select.value = draft.size_unit;
   }
 
   if (data.is_promo) {
@@ -871,9 +1021,9 @@ function applyExtraction(el, draft, data) {
 async function saveRecord(el, draft) {
   const pence = u.inputToPence(draft.price_text);
 
-  if (!draft.item_id) return toast("還沒選品項 Pick an item first", { warn: true });
-  if (pence === null || pence <= 0) return toast("價格沒填 Enter a price", { warn: true });
-  if (!draft.store_id) return toast("還沒選超市 Pick a store", { warn: true });
+  if (!draft.item_id) return toast("還沒選品項", { warn: true });
+  if (pence === null || pence <= 0) return toast("價格沒填", { warn: true });
+  if (!draft.store_id) return toast("還沒選超市", { warn: true });
 
   // 同一家店的同一個品項、同一個容量 → 視為同一個商品，價格接在它後面變成走勢。
   // 容量不同就是不同商品（2L 跟 1L 是兩件事），各自留一條線。
@@ -981,20 +1131,30 @@ function openItemPicker(onPick) {
       .sort((a, b) => (a.name_zh || "").localeCompare(b.name_zh || "", "zh-Hant"));
 
     const create = `
-      <button class="itemrow" data-new>
+      <div class="itemrow"><button class="open" data-new>
         <span class="ic" style="color:var(--accent-ink)">＋</span>
         <span class="body"><span class="nm">${bi1("newItem")}${q ? `：${esc(q)}` : ""}</span></span>
-      </button>`;
+      </button></div>`;
 
     results.innerHTML = create + (list.length
       ? list.map((i) => itemRowHtml(i, { compact: true })).join("")
-      : `<div class="empty"><p>還沒有品項<br>No items yet</p></div>`);
+      : q ? "" : `<div class="empty"><p>還沒有品項</p></div>`) + presetsHtml(q);
   };
 
   input.oninput = draw;
   draw();
 
   results.onclick = async (e) => {
+    const preset = e.target.closest("[data-preset]");
+    if (preset) {
+      const [name_zh, name_en, base_unit, cat] = PRESETS[Number(preset.dataset.preset)];
+      const item = await db.put("items", { name_zh, name_en, base_unit, category: cat, emoji: null, note: "" });
+      closeSheet(el);
+      await refresh();
+      toast(`已新增「${esc(name_zh)}」`);
+      await onPick(item);
+      return;
+    }
     if (e.target.closest("[data-new]")) {
       openItemEditor(null, async (item) => { closeSheet(el); await onPick(item); }, input.value.trim());
       return;
@@ -1007,6 +1167,30 @@ function openItemPicker(onPick) {
   };
 
   setTimeout(() => input.focus(), 60);
+}
+
+// 常用品項：還沒建過的照分類列出來，點一下就建立。
+// 已經有同名品項的不列 —— 不然點了會建出兩個「牛奶」，比價就分成兩半了。
+function presetsHtml(q) {
+  const have = new Set(state.items.flatMap((i) =>
+    [i.name_zh, (i.name_en || "").toLowerCase()].filter(Boolean)));
+  const ql = q.toLowerCase();
+  const left = PRESETS
+    .map((p, n) => ({ p, n }))
+    .filter(({ p }) => !have.has(p[0]) && !have.has(p[1].toLowerCase()))
+    .filter(({ p }) => !q || p[0].includes(q) || p[1].toLowerCase().includes(ql));
+  if (!left.length) return "";
+
+  const byCat = new Map();
+  for (const r of left) {
+    if (!byCat.has(r.p[3])) byCat.set(r.p[3], []);
+    byCat.get(r.p[3]).push(r);
+  }
+  return `<div class="section-head"><h2>常用品項・點一下就新增</h2></div>
+    ${[...byCat.entries()].map(([cat, rows]) => `
+      <div class="preset-cat">${category(cat)[3]} ${esc(category(cat)[1])}</div>
+      <div class="preset-chips">${rows.map(({ p, n }) =>
+        `<button class="chip" data-preset="${n}">${esc(p[0])}</button>`).join("")}</div>`).join("")}`;
 }
 
 // ---------------------------------------------------------------- 品項編輯
@@ -1049,28 +1233,20 @@ function openItemEditor(existing, onSaved, seedText = "") {
       <label class="row">
         <span class="k">${bi1("category")}</span>
         <select class="sel" data-f="category">
-          ${CATEGORIES.map(([id, z, e2, ic]) =>
+          ${CATEGORIES.filter((c) => c[0] !== "produce" || draft.category === "produce").map(([id, z, e2, ic]) =>
             `<option value="${id}"${draft.category === id ? " selected" : ""}>${ic} ${z} ${e2}</option>`).join("")}
         </select>
       </label>
       <label class="row">
         <span class="k">${bi1("baseUnit")}</span>
         <select class="sel" data-f="base_unit"${lockedBase ? " disabled" : ""}>
-          <option value="g"${draft.base_unit === "g" ? " selected" : ""}>重量 by weight (kg)</option>
-          <option value="ml"${draft.base_unit === "ml" ? " selected" : ""}>容量 by volume (L)</option>
-          <option value="each"${draft.base_unit === "each" ? " selected" : ""}>計個 per item</option>
+          <option value="g"${draft.base_unit === "g" ? " selected" : ""}>按重量（每公斤）</option>
+          <option value="ml"${draft.base_unit === "ml" ? " selected" : ""}>按容量（每公升）</option>
+          <option value="each"${draft.base_unit === "each" ? " selected" : ""}>按個</option>
         </select>
       </label>
     </div>
-    <p class="note">
-      <b>計價基準決定怎麼比</b> —— 選「重量」就一律換算成每公斤，選「容量」就是每公升。
-      這樣 Aldi 的 2L 才比得過 Waitrose 的 1.13L。<br>
-      This is what makes different pack sizes comparable.
-      ${lockedBase ? `<br><br><b>底下已經有 ${productCount} 筆商品，所以這一項鎖住了。</b>
-      它們的容量單位都是照現在這個基準填的，改掉會讓單價全部算錯單位
-      （500g 會被當成 500ml）。真的要換就把這個品項刪掉重建。<br>
-      <i class="en">Locked because ${productCount} product(s) already use this unit.</i>` : ""}
-    </p>
+    ${lockedBase ? `<p class="note">底下已經有 ${productCount} 筆商品，計價基準鎖住了（改掉單價會全部算錯）。</p>` : ""}
     ${existing ? `<div class="rows"><button class="row danger" data-del><span class="k">${bi1("delete")}</span></button></div>` : ""}
   `, { saveLabel: bi1("save") });
 
@@ -1099,7 +1275,7 @@ function openItemEditor(existing, onSaved, seedText = "") {
 
   el.querySelector("[data-save]").onclick = async () => {
     if (!draft.name_zh.trim() && !draft.name_en.trim()) {
-      return toast("至少填一個名稱 Enter a name", { warn: true });
+      return toast("至少填一個名稱", { warn: true });
     }
     const saved = await db.put("items", {
       ...(existing || {}),
@@ -1120,7 +1296,7 @@ function openItemEditor(existing, onSaved, seedText = "") {
     await db.remove("items", existing.id);
     closeSheet(el);
     await refresh();
-    toast("已刪除 Deleted");
+    toast("已刪除");
   });
 }
 
@@ -1167,18 +1343,11 @@ function openStoreEditor(existing, onSaved, presetGroup = "uk") {
         </div>
       </div>
       ${existing ? `<label class="row">
-        <span class="k">${bi1("archive")} <i class="en">hide from pickers</i></span>
+        <span class="k">${bi1("archive")}</span>
         <input class="chk" data-f="archived" type="checkbox"${draft.archived ? " checked" : ""}>
       </label>` : ""}
     </div>
 
-    <p class="note">
-      分組決定它跟誰比。街角的亞洲雜貨選「亞洲超市」，它就只會跟 Tian Tian、
-      Starry Mart 排在一起，不會拿去跟 Aldi 比牛奶。<br>
-      <i class="en">The group decides which stores it is ranked against.</i>
-      ${usedCount ? `<br><br>目前有 <b>${usedCount}</b> 筆商品記在這家店。
-      封存只是從選單裡收起來，已經記的價格照常出現在比價裡。` : ""}
-    </p>
 
     ${existing ? `<div class="rows"><button class="row danger" data-del>
       <span class="k">${bi1("delete")}</span></button></div>` : ""}
@@ -1198,7 +1367,7 @@ function openStoreEditor(existing, onSaved, presetGroup = "uk") {
   };
 
   el.querySelector("[data-save]").onclick = async () => {
-    if (!String(draft.name).trim()) return toast("店名沒填 Enter a store name", { warn: true });
+    if (!String(draft.name).trim()) return toast("店名沒填", { warn: true });
     const saved = await db.put("stores", {
       ...(existing || {}),
       name: String(draft.name).trim(),
@@ -1220,7 +1389,7 @@ function openStoreEditor(existing, onSaved, presetGroup = "uk") {
     await db.remove("stores", existing.id);
     closeSheet(el);
     await refresh();
-    toast("已刪除 Deleted");
+    toast("已刪除");
   });
 }
 
@@ -1235,26 +1404,21 @@ function openStoreList() {
       const mine = rows.filter((r) => r.group === g.id);
       if (!mine.length) return "";
       return `<div class="section-head"><h2>${g.icon} ${esc(g.zh)}
-          <i class="en">${esc(g.en)}</i></h2></div>
+</h2></div>
         <div class="rows">${mine.map((s) => {
           const n = state.products.filter((p) => p.store_id === s.id).length;
           return `<button class="row" data-store-edit="${esc(s.id)}">
-            <span class="swatch" style="width:4px;height:26px;border-radius:2px;background:${s.color};flex:none"></span>
-            <span class="k" style="flex:1;min-width:0">${esc(s.name)}${s.archived ? ` <i class="en">已封存 archived</i>` : ""}
+            ${storeBadge(s)}
+            <span class="k" style="flex:1;min-width:0">${esc(s.name)}${s.archived ? `` : ""}
               ${s.note ? `<i class="en">${esc(s.note)}</i>` : ""}</span>
             <span class="v num">${n ? `${n} 項` : ""}</span>
           </button>`;
         }).join("")}</div>`;
     }).join("") : `<div class="empty"><div class="big">🏪</div>
-      <p>還沒有自訂店家<br>No custom stores yet<br><br>
+      <p>還沒有自訂店家<br><br>
       轉角的雜貨店、市集攤位這種<br>清單裡沒有的地方，加進來就能記價<br>
-      <i class="en">Add the corner shop or market stall you actually buy from</i></p></div>`}
+</p></div>`}
 
-    <p class="note">
-      內建的連鎖店（Sainsbury's、Aldi、Tian Tian…）寫在程式裡，不會出現在這份清單，
-      也不能刪 —— 它們幾乎不會變，同步它們只是浪費。這裡只放你自己加的。<br>
-      <i class="en">Built-in chains are not listed here; this is only what you added.</i>
-    </p>
   `);
 
   el.querySelector(".sheet-body").addEventListener("click", (e) => {
@@ -1292,13 +1456,8 @@ function openTidy() {
           </span>
           <input class="chk" type="checkbox" data-fix="${esc(item.id)}" data-to="${esc(to)}" checked>
         </label>`).join("")}
-    </div>
-    <p class="note">
-      勾起來的會改分類。<b>圖示不用改</b> —— 它已經自己從名稱判斷了，
-      這裡只處理分類。<br>
-      <i class="en">Only categories are written; icons resolve from the name automatically.</i>
-    </p>` : `<div class="empty"><div class="big">✨</div>
-      <p>分類看起來都對<br>Categories look fine</p></div>`,
+    </div>` : `<div class="empty"><div class="big">✨</div>
+      <p>分類看起來都對</p></div>`,
     changes.length ? { saveLabel: bi1("save") } : {});
 
   el.querySelector("[data-save]")?.addEventListener("click", async () => {
@@ -1309,7 +1468,7 @@ function openTidy() {
     }
     closeSheet(el);
     await refresh();
-    toast(`已整理 ${boxes.length} 個品項 Tidied ${boxes.length} items`);
+    toast(`已整理 ${boxes.length} 個品項`);
   });
 }
 
@@ -1326,12 +1485,7 @@ function openEmojiPicker(current, onPick) {
       <div class="emoji-grid">
         ${[...chars].filter((c) => c.trim()).map((c) =>
           `<button class="emoji-btn${c === current ? " on" : ""}" data-emoji="${esc(c)}">${c}</button>`).join("")}
-      </div>`).join("")}
-    <p class="note">
-      不挑的話會<b>從名稱自動判斷</b>（「蘋果」→ 🍎、「醬油」→ 🫗），
-      判斷不出來才用分類的圖示。<br>
-      <i class="en">Left on auto, the icon is guessed from the name.</i>
-    </p>`);
+      </div>`).join("")}`);
 
   el.querySelector(".sheet-body").addEventListener("click", (e) => {
     if (e.target.closest("[data-auto]")) { closeSheet(el); onPick(null); return; }
@@ -1347,47 +1501,40 @@ function openEmojiPicker(current, onPick) {
 async function openItemDetail(itemId) {
   const item = itemById(itemId);
   if (!item) return;
+  markViewed(itemId);   // 不 await：面板先開，寫入在背景
 
-  const groups = rankByGroup(itemId);
-  const cat = category(item.category);
+  // 同一樣東西，所有有賣的店排在一起，只有一個「最便宜」。
+  //
+  // 以前照店家分組各排各的，櫛瓜在 Baleys（一般超市）和 Fulham Greens（獨立店家）
+  // 各自是「最便宜」，兩個綠標並排，看不出到底哪家便宜。分組的理由（Aldi 買不到醬油）
+  // 只對整籃總價成立 —— 那取決於店裡有沒有賣；同一樣東西兩家都有賣時，直接比就對了。
+  const rows = rankItem(itemId);
+  const multiGroup = new Set(rows.map((r) => r.store.group)).size > 1;
   const inList = state.list_items.some((li) => li.list_id === state.listId && li.item_id === itemId);
 
-  // 只有一組有資料時就不必再標組名了，那只是噪音
-  const showGroupHeads = groups.length > 1;
-
   const el = sheet(biText(item.name_zh, item.name_en, { block: true }), `
-    <div class="storebar" style="border-bottom:0;padding-bottom:4px">
-      <button class="chip" data-act="record">＋ ${bi1("record")}</button>
-      <button class="chip" data-act="list">${inList ? "✓ 已在清單 In basket" : bi1("addToList")}</button>
-      <button class="chip" data-act="edit">${bi1("edit")}</button>
-    </div>
-
-    <div class="section-head"><h2>${itemEmoji(item)} ${esc(cat[1])} <i class="en">${esc(cat[2])}</i></h2></div>
-
-    ${groups.length ? groups.map(({ group, rows }) => `
-      ${showGroupHeads ? `<div class="section-head"><h2>${group.icon} ${esc(group.zh)}
-        <i class="en">${esc(group.en)}</i></h2></div>` : ""}
-      <div class="rank">${rows.map((r, i) => rankRowHtml(r, i === 0, item)).join("")}</div>`).join("")
-      : `<div class="empty"><div class="big">◌</div><p>還沒有可比較的價格<br>No comparable prices yet</p></div>`}
-
-    ${groups.length ? `<p class="note">
-      比的是<b>單價</b>，不是包裝價 —— 包裝大小不一樣，只比標價會得到相反的結論。<br>
-      Ranked by unit price, not pack price.
-      ${showGroupHeads ? `<br><br><b>分組排，各組各自有自己的最便宜</b> ——
-      這幾種店不是同一個貨架上的競爭關係，混在一起排會得到
-      「亞洲超市的牛奶比較貴」這種正確但沒有用的結論。<br>
-      <i class="en">Ranked within each group: they are not substitutes for each other.</i>` : ""}
-    </p>` : ""}
+    ${rows.length
+      ? `<div class="rank">${rows.map((r, i) => rankRowHtml(r, i === 0, item, { multiGroup })).join("")}</div>`
+      : `<div class="empty"><div class="big">${itemEmoji(item)}</div><p>還沒有價格</p></div>`}
 
     ${historySection(itemId, item)}
     ${observationsSection(itemId)}
-  `);
+  `, {
+    closeLabel: "關閉",
+    actions: `<button class="btn-foot" data-act="edit">${bi1("edit")}</button>
+      <button class="btn-foot" data-act="list">${inList ? "移出清單" : bi1("addToList")}</button>`,
+    saveLabel: `＋ ${bi1("record")}`,
+  });
 
-  el.querySelector(".storebar").onclick = async (e) => {
-    if (e.target.closest("[data-act='record']")) { closeSheet(el); openRecord({ itemId }); }
+  el.querySelector(".sheet-foot").addEventListener("click", async (e) => {
+    if (e.target.closest("[data-save]")) { closeSheet(el); openRecord({ itemId }); }
     if (e.target.closest("[data-act='edit']")) { closeSheet(el); openItemEditor(item, () => refresh()); }
-    if (e.target.closest("[data-act='list']")) { closeSheet(el); await addToList(itemId); }
-  };
+    if (e.target.closest("[data-act='list']")) {
+      closeSheet(el);
+      await toggleSelected(itemId);
+      toast(inList ? "已移出清單" : "已加入清單");
+    }
+  });
 
   // 排行列與紀錄列都能點開編輯，所以綁在整個面板上
   el.querySelector(".sheet-body").addEventListener("click", (e) => {
@@ -1398,18 +1545,21 @@ async function openItemDetail(itemId) {
   });
 }
 
-function rankRowHtml(r, isBest, item) {
+// 一家店一行：店名、這包多大、多久以前；右邊是單價（大）與包裝價（小）。
+function rankRowHtml(r, isBest, item, { multiGroup = false } = {}) {
   const p = r.product;
-  const packLabel = [p.brand, u.formatSize(p.size, p.size_unit)].filter(Boolean).join(" · ");
-  // 排行列可以直接點開編輯：看到「米 1.9p/kg」這種明顯不對的數字時，
-  // 第一個反應就是去戳它，不該還要先捲到最底下的紀錄列表才找得到入口。
+  const g = groupById(r.store.group);
+  const detail = [p.name_en, u.formatSize(p.size, p.size_unit), r.fresh.label].filter(Boolean).join(" · ");
+  // 排行列可以直接點開編輯：看到明顯不對的數字時，第一個反應就是去戳它。
   return `<button class="rankrow${isBest ? " best" : ""}${r.fresh.stale ? " stale" : ""}"
       data-price-id="${esc(r.price.id)}">
-    <span class="swatch" style="background:${r.store.color}"></span>
+    ${storeBadge(r.store)}
     <span class="body">
-      <span class="store">${esc(r.store.name)}${isBest ? `<span class="tag win">${esc(zh("cheapest"))}</span>` : ""}${r.price.is_promo ? `<span class="tag promo">${esc(r.price.promo_note || "特價 promo")}</span>` : ""}</span>
-      <span class="detail">${esc([p.name_en, packLabel].filter(Boolean).join(" · ") || "—")}</span>
-      <span class="detail">${esc(r.fresh.label)}${r.fresh.stale ? ` · <span class="tag old">${esc(zh("stale"))}</span>` : ""}</span>
+      <span class="store">${esc(r.store.name)}${isBest ? `<span class="tag win">${esc(zh("cheapest"))}</span>` : ""}${
+        r.price.is_promo ? `<span class="tag promo">${esc(r.price.promo_note || "特價")}</span>` : ""}${
+        r.fresh.stale ? `<span class="tag old">舊</span>` : ""}${
+        multiGroup ? `<span class="tag grp">${esc(g.zh)}</span>` : ""}</span>
+      <span class="detail">${esc(detail || "—")}</span>
     </span>
     <span class="fig">
       <span class="a num">${esc(u.formatUnitPrice(r.unit, item.base_unit))}</span>
@@ -1465,7 +1615,7 @@ function historySection(itemId, item) {
        <span style="font-size:11px;color:var(--muted)">${esc(storeName(s))}</span></span>`).join("");
 
   return `
-    <div class="section-head"><h2>${esc(zh("history"))} <i class="en">${esc(en("history"))}</i></h2></div>
+    <div class="section-head"><h2>${esc(zh("history"))}</h2></div>
     <figure class="chart">
       <svg class="chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"
            aria-label="各店單價走勢 unit price over time">
@@ -1493,7 +1643,7 @@ function observationsSection(itemId) {
   rows.sort((a, b) => (a.price.observed_on < b.price.observed_on ? 1 : -1));
 
   return `
-    <div class="section-head"><h2>${esc(zh("allPrices"))} <i class="en">${esc(en("allPrices"))}</i></h2></div>
+    <div class="section-head"><h2>${esc(zh("allPrices"))}</h2></div>
     <div class="rows" data-obs>
       ${rows.map(({ product, price }) => `
         <button class="row" data-price-id="${esc(price.id)}">
@@ -1524,8 +1674,8 @@ async function deletePrice(priceId) {
 
 // ---------------------------------------------------------------- 清單
 //
-// 「勾選」跟「加入清單」是同一件事 —— 存的還是 list_items，
-// 所以份量、同步、跨裝置全部照舊，只是入口從另一頁變成首頁上的圈圈。
+// 清單存的是 list_items，份量、同步、跨裝置全部照舊。
+// 入口在品項明細底部的「加入清單」；首頁上方的整籃面板照這份清單算。
 
 function selectedItemIds() {
   return new Set(state.list_items
@@ -1552,23 +1702,7 @@ async function clearSelected() {
   const mine = state.list_items.filter((li) => li.list_id === state.listId);
   for (const li of mine) await db.remove("list_items", li.id);
   await refresh();
-  toast(`已清除 ${mine.length} 項 Cleared`);
-}
-
-async function addToList(itemId) {
-  const existing = state.list_items.find((li) => li.list_id === state.listId && li.item_id === itemId);
-  if (existing) { toast("已經在清單裡 Already in basket"); return; }
-
-  // 預設 1（1 公斤 / 1 公升 / 1 個）。單位由品項的計價基準決定，見 displayUnitOf()。
-  await db.put("list_items", {
-    list_id: state.listId,
-    item_id: itemId,
-    qty: 1,
-    sort: state.list_items.length * 10,
-    checked: 0,
-  });
-  await refresh();
-  toast(`已加入清單 Added to basket`);
+  toast(`已清除 ${mine.length} 項`);
 }
 
 // 一籃子在各店要多少錢。
@@ -1614,7 +1748,8 @@ function basketAnalysis(groupId) {
 
   const results = activeStores.map((store) => {
     let pence = 0;
-    let oldest = 0;
+    // 用每一項自己的 stale 判斷，不拿天數比門檻 —— 促銷價的門檻比一般價短
+    let stale = false;
     const missing = [];
 
     for (const { li, item } of useLines) {
@@ -1623,14 +1758,14 @@ function basketAnalysis(groupId) {
       const qtyBase = u.toBase(li.qty, displayUnitOf(item.base_unit));
       if (qtyBase === null) { missing.push(item); continue; }
       pence += qtyBase * hit.unit;
-      oldest = Math.max(oldest, hit.fresh.days ?? 999);
+      if (hit.fresh.stale) stale = true;
     }
 
     return {
       store, pence, missing,
       covered: useLines.length - missing.length,
       total: useLines.length,
-      oldest,
+      stale,
     };
   }).filter((r) => r.covered > 0);
 
@@ -1661,64 +1796,68 @@ function syncBadge() {
   return `<span class="sync-dot" data-state="${s}"></span><span class="sync-label">${esc(label)}</span>`;
 }
 
-function topbar(key, extra = "") {
+// below：跟著標題一起黏在上面的第二列（店家頁的店家切換列）
+function topbar(key, extra = "", below = "") {
   return `<div class="topbar"><div class="topbar-inner">
     <h1>${bi(key)}</h1><div class="spacer"></div>${extra}${syncBadge()}
-  </div></div>`;
+  </div>${below}</div>`;
 }
 
+// 底部選單的圖示用自己畫的線條，不用 emoji。
+// emoji 由系統字型畫：同一個 🏬 在 iPhone 跟安卓長得完全不一樣，
+// ⚙ 在部分安卓機上還會掉成黑白文字。品項的 emoji 是內容（每樣東西自己的臉），
+// 各平台長得不同無所謂；導覽圖示是介面，兩邊要一樣。
+const svg = (d) => `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor"
+  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const ICON = {
+  compare:  svg(`<path d="M7 20V4M3 8l4-4 4 4M17 4v16M13 16l4 4 4-4"/>`),
+  stores:   svg(`<path d="M4 10v10h16V10"/><path d="M3 10 5 4h14l2 6z"/><path d="M10 20v-5h4v5"/>`),
+  camera:   svg(`<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>`),
+  history:  svg(`<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>`),
+  image:    svg(`<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="m21 16-5-5-9 9"/>`),
+  stack:    svg(`<rect x="7" y="7" width="13" height="13" rx="2"/><path d="M4 16V5a1 1 0 0 1 1-1h11"/>`),
+  pencil:   svg(`<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>`),
+  settings: svg(`<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>`),
+};
+
 function tabbar() {
-  const tab = (route, ic, key) =>
+  const tab = (route, key) =>
     `<button class="tab" data-route="${route}"${state.route === route ? ' aria-current="page"' : ""}>
-       <span class="ic">${ic}</span><span class="nm">${esc(zh(key))}</span><span class="en">${esc(en(key))}</span></button>`;
+       <span class="ic">${ICON[route]}</span><span class="nm">${esc(zh(key))}</span></button>`;
 
   return `<nav class="tabbar"><div class="tabbar-inner">
-    ${tab("compare", "⇅", "compare")}
-    ${tab("stores", "🏬", "storesTab")}
+    ${tab("compare", "compare")}
+    ${tab("stores", "storesTab")}
     <div class="fab-slot">
       <button class="fab" data-act="add" aria-label="${plain("record")}">
-        <span class="ic">📷</span><span class="nm">${esc(zh("record"))}</span>
+        <span class="ic">${ICON.camera}</span><span class="nm">${esc(zh("record"))}</span>
       </button>
     </div>
-    ${tab("history", "🧾", "historyTab")}
-    ${tab("settings", "⚙", "settings")}
+    ${tab("history", "historyTab")}
+    ${tab("settings", "settings")}
   </div></nav>`;
 }
 
-function itemRowHtml(item, { compact = false, pick = false } = {}) {
-  const cat = category(item.category);
-  const rows = compact ? [] : rankItem(item.id);
-  const best = rows[0];
-  const stores = compact ? 0 : rows.length;
-
-  const meta = compact ? ""
-    : (stores
-        ? `${stores} 家有資料 <i class="en">${stores} store${stores > 1 ? "s" : ""}</i>`
-        : `還沒有價格 <i class="en">no prices yet</i>`);
+// 一列只回答一件事：這樣東西最便宜多少、在哪家。其他的點進去再看。
+function itemRowHtml(item, { compact = false } = {}) {
+  const best = compact ? null : rankItem(item.id)[0];
 
   const open = `<button class="open" data-item="${esc(item.id)}">
     <span class="ic">${itemEmoji(item)}</span>
     <span class="body">
       <span class="nm">${esc(item.name_zh || item.name_en)}
         ${item.name_zh && item.name_en ? `<i class="en">${esc(item.name_en)}</i>` : ""}</span>
-      ${meta ? `<span class="meta">${meta}</span>` : ""}
     </span>
     ${best ? `<span class="best">
       <span class="up num">${esc(u.formatUnitPrice(best.unit, item.base_unit))}</span>
       <span class="who">${esc(best.store.name)}${best.fresh.stale ? " · 舊" : ""}</span>
-    </span>` : ""}
+    </span>` : compact ? "" : `<span class="best"><span class="who">還沒有價格</span></span>`}
   </button>`;
 
-  // 勾選與打開是兩件事，所以是兩個按鈕 —— 按鈕不能巢狀在按鈕裡面。
-  // 沒有 pick 的地方（選單裡）就整列都是 open。
-  if (!pick) return `<div class="itemrow${best && best.fresh.stale ? " dim" : ""}">${open}</div>`;
-
-  const on = selectedItemIds().has(item.id);
-  return `<div class="itemrow${best && best.fresh.stale ? " dim" : ""}${on ? " picked" : ""}">
-    <button class="pick" data-pick="${esc(item.id)}" role="checkbox" aria-checked="${on}"
-      aria-label="${plain("addToList")}">${on ? "✓" : ""}</button>
-    ${open}
-  </div>`;
+  // 整列只有一個動作：點開看哪家最便宜。以前左邊有個勾選圈圈（加進整籃），
+  // 但它跟「點開」擠在同一列，常常按錯，而且看不出圈圈是做什麼的。
+  // 加進整籃改在明細面板底部做。
+  return `<div class="itemrow${best && best.fresh.stale ? " dim" : ""}">${open}</div>`;
 }
 
 // ---------------------------------------------------------------- 頁面
@@ -1731,60 +1870,109 @@ function itemRowHtml(item, { compact = false, pick = false } = {}) {
 function renderCompare() {
   const q = state.query.trim();
   const picked = selectedItemIds();
+  const list = homeList(q);
 
-  const list = state.items
-    .filter((i) => matchesQuery(i, q))
-    .map((i) => ({ item: i, seen: lastSeenOf(i.id) }))
-    .sort((a, b) => (a.seen === b.seen
-      ? (a.item.name_zh || "").localeCompare(b.item.name_zh || "", "zh-Hant")
-      : (a.seen < b.seen ? 1 : -1)));
+  // 加進清單的排最前面，不然選了幾樣之後要往回捲才找得到自己選了什麼
+  const chosen = list.filter((i) => picked.has(i.id));
+  const rest = list.filter((i) => !picked.has(i.id));
 
-  // 勾起來的排最前面，不然選了幾樣之後要往回捲才找得到自己選了什麼
-  const chosen = list.filter((r) => picked.has(r.item.id));
-  const rest = list.filter((r) => !picked.has(r.item.id));
-  const withPrices = rest.filter((r) => r.seen);
-  const without = rest.filter((r) => !r.seen);
+  const sortBtn = (id, label) => `<button class="chip${state.homeSort === id ? " on" : ""}"
+    data-home-sort="${id}" aria-pressed="${state.homeSort === id}">${label}</button>`;
+
+  let body = "";
+  if (state.homeSort === "cat") {
+    body = categorySections(rest).map(({ cat, items }) => `
+      <div class="section-head"><h2>${cat[3]} ${esc(cat[1])}</h2>
+        ${cat[0] === "produce"
+          ? `<button class="more" data-act="tidy">分成蔬菜／水果</button>`
+          : `<span class="more num">${items.length}</span>`}</div>
+      ${items.map((i) => itemRowHtml(i)).join("")}`).join("");
+  } else if (rest.length) {
+    body = `<div class="section-head"><h2>${q ? "搜尋結果" : state.homeSort === "new" ? "最近新增" : "最近看過"}</h2>
+        <span class="more num">${rest.length}</span></div>
+      ${rest.map((i) => itemRowHtml(i)).join("")}`;
+  }
 
   return `
-    ${topbar("compare", `<button class="icon-btn" data-act="new-item" aria-label="${plain("newItem")}">＋</button>`)}
+    ${topbar("compare")}
     <main class="screen">
       <div class="searchbar">
         <input type="search" data-q value="${esc(state.query)}"
-               placeholder="${plain("search")}… 牛奶 / milk / chicken" autocomplete="off">
+               placeholder="搜尋… 牛奶 / milk" autocomplete="off">
       </div>
 
-      ${!state.items.length ? `<div class="empty">
+      ${state.items.length ? `<div class="sortbar" role="group" aria-label="排序">
+        ${sortBtn("cat", "分類")}${sortBtn("recent", "最近看過")}${sortBtn("new", "最近新增")}
+      </div>` : `<div class="empty">
         <div class="big">🛒</div>
-        <p>還沒有任何紀錄<br>Nothing recorded yet<br><br>
-        按下面的 <b>📷 記價</b> 拍一張貨架標籤開始<br>
-        Tap <b>Record</b> to photograph a shelf label</p>
-      </div>` : ""}
+        <p>還沒有任何紀錄<br>按下面的<b>記價</b>拍一張貨架標籤開始</p>
+      </div>`}
 
       ${picked.size ? basketPanelHtml() : ""}
 
       ${chosen.length ? `
-        <div class="section-head"><h2>✓ ${esc(zh("selected"))}
-          <i class="en">${esc(en("selected"))}</i></h2>
+        <div class="section-head"><h2>✓ ${esc(zh("selected"))}</h2>
           <span class="more num">${chosen.length}</span></div>
-        ${chosen.map((r) => itemRowHtml(r.item, { pick: true })).join("")}` : ""}
+        ${chosen.map((i) => itemRowHtml(i)).join("")}` : ""}
 
-      ${withPrices.length ? `
-        <div class="section-head"><h2>最近記的 <i class="en">Recently recorded</i></h2></div>
-        ${withPrices.map((r) => itemRowHtml(r.item, { pick: true })).join("")}` : ""}
-
-      ${without.length ? `
-        <div class="section-head"><h2>還沒有價格 <i class="en">No prices yet</i></h2></div>
-        ${without.map((r) => itemRowHtml(r.item, { pick: true })).join("")}` : ""}
-
-      ${state.items.length ? `<p class="note">
-        點<b>名字</b>看那一樣哪家便宜，點左邊的<b>圈圈</b>把它加進整籃比較。<br>
-        <i class="en">Tap the name for one item, tap the circle to add it to the basket.</i><br><br>
-        排行看的是<b>單價</b>（每公斤／每公升），不是架上的標價 ——
-        Aldi 2L 賣 £1.45、Waitrose 1.13L 賣 £1.35，便宜的其實是前者。<br>
-        <i class="en">Ranked by unit price, because pack sizes differ between stores.</i>
-      </p>` : ""}
+      ${body}
     </main>
     ${tabbar()}`;
+}
+
+const byName = (a, b) => (a.name_zh || a.name_en || "").localeCompare(b.name_zh || b.name_en || "", "zh-Hant");
+
+// 首頁要列哪些、照什麼順序。
+//
+// 「最近看過」用的是快照：進首頁或切換排法時排一次，之後點開看過不再重排。
+// 不然你點開一樣、關掉，它就跳到最上面，原本在看的那一串全部往下移一格 ——
+// 使用者的原話是「點了之後順序就亂掉，找不到東西」。
+function homeList(q) {
+  const items = state.items.filter((i) => matchesQuery(i, q));
+  if (state.homeSort === "new") {
+    return items.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || "") || byName(a, b));
+  }
+  if (state.homeSort === "recent") {
+    if (!state.homeOrder) {
+      const recent = recentMap();
+      state.homeOrder = [...state.items]
+        .sort((a, b) => {
+          const x = recent.get(a.id) || "", y = recent.get(b.id) || "";
+          return x === y ? byName(a, b) : (x < y ? 1 : -1);
+        })
+        .map((i) => i.id);
+    }
+    // 快照之後才建的品項（剛記價時當場新增的）放最上面，不然會找不到
+    const pos = new Map(state.homeOrder.map((id, n) => [id, n]));
+    return items.sort((a, b) => (pos.get(a.id) ?? -1) - (pos.get(b.id) ?? -1));
+  }
+  return items;
+}
+
+// 照分類分段。段落裡照名稱排，點開看過、記了價格都不會跑位。
+//
+// 分類的先後照「有幾筆價格」：記得最多的就是你最在意的東西，放最上面。
+// 價格數一樣再比品項數，再照 CATEGORIES 的順序。沒有品項的分類不出現。
+function categorySections(items) {
+  const itemOfProduct = new Map(state.products.map((p) => [p.id, p.item_id]));
+  const catOfItem = new Map(state.items.map((i) => [i.id, category(i.category)[0]]));
+  const weight = new Map();
+  for (const pr of state.prices) {
+    const c = catOfItem.get(itemOfProduct.get(pr.product_id));
+    if (c) weight.set(c, (weight.get(c) || 0) + 1);
+  }
+
+  const groups = new Map();
+  for (const i of items) {
+    const c = category(i.category)[0];
+    if (!groups.has(c)) groups.set(c, []);
+    groups.get(c).push(i);
+  }
+  const order = CATEGORIES.map((c) => c[0]);
+  return [...groups.entries()]
+    .map(([id, list]) => ({ cat: category(id), items: list.sort(byName), w: weight.get(id) || 0 }))
+    .sort((a, b) => (b.w - a.w) || (b.items.length - a.items.length)
+      || (order.indexOf(a.cat[0]) - order.indexOf(b.cat[0])));
 }
 
 // 已選品項的整籃比較。原本是獨立的一頁，現在長在首頁上方 ——
@@ -1815,14 +2003,14 @@ function basketPanelHtml() {
 
   return `<section class="basket-panel">
     <div class="section-head">
-      <h2>🧺 ${esc(zh("total"))} <i class="en">${esc(en("total"))}</i></h2>
+      <h2>🧺 ${esc(zh("total"))}</h2>
       <span class="more num">${lines.length} 項</span>
       <button class="linkbtn" data-act="clear-basket">${bi1("clear")}</button>
     </div>
 
     ${groups.map(({ group, results, useLines, common }) => `
       <div class="grouphead">${group.icon} ${esc(group.zh)}
-        <i class="en">${esc(group.en)}</i>
+
         <span class="num">${state.commonOnly && common.length
           ? `${common.length} 項共同` : `${useLines.length} 項`}</span></div>
       <div class="rank">${results.map((r, i) => basketRowHtml(r, i === 0)).join("")}</div>`).join("")}
@@ -1832,20 +2020,12 @@ function basketPanelHtml() {
         ${bi1("commonOnly")}</button></div>` : ""}
 
     <details class="basket-lines">
-      <summary>調整份量 <i class="en">Adjust quantities</i>（${lines.length}）</summary>
+      <summary>調整份量（${lines.length}）</summary>
       <div class="rows" data-lines>${rows}</div>
     </details>
 
-    ${groups.length ? `<p class="note">
-      <b>分組分開算</b> —— 你沒辦法在 Aldi 買醬油，轉角蔬果行也沒有衛生紙。
-      把它們排在一起，只賣少數品項的店會因為缺一堆東西而永遠墊底。<br>
-      <b>${esc(zh("estimated"))}</b> —— 用各店單價乘上份量，所以包裝大小不同也比得出來，
-      但你只能買整包，結帳金額會有出入。<br>
-      <b>缺資料不補值</b>：「已知 N / M」就是這家店真正能算的品項數。<br>
-      <i class="en">Each group ranked on its own; estimated by unit price; missing items are
-      never filled in with another store's price.</i>
-    </p>` : `<p class="note">選到的品項還沒有任何價格紀錄
-      <i class="en">Nothing priced among the selected items yet</i></p>`}
+    ${groups.length ? "" : `<p class="note">選到的品項還沒有任何價格紀錄
+</p>`}
   </section>`;
 }
 
@@ -1853,18 +2033,18 @@ function basketRowHtml(r, isBest) {
   const missingNames = r.missing.slice(0, 3).map((i) => i.name_zh || i.name_en).join("、");
   const more = r.missing.length > 3 ? ` 等 ${r.missing.length} 項` : "";
 
-  return `<div class="rankrow${isBest ? " best" : ""}${r.oldest > u.STALE_DAYS ? " stale" : ""}">
-    <span class="swatch" style="background:${r.store.color}"></span>
+  return `<div class="rankrow${isBest ? " best" : ""}${r.stale ? " stale" : ""}">
+    ${storeBadge(r.store)}
     <span class="body">
       <span class="store">${esc(r.store.name)}${isBest ? `<span class="tag win">${esc(zh("cheapest"))}</span>` : ""}</span>
       <span class="detail">${esc(zh("covered"))} ${r.covered} / ${r.total}
-        <i class="en">items priced</i>${r.oldest > u.STALE_DAYS ? ` · <span class="tag old">${esc(zh("stale"))}</span>` : ""}</span>
+${r.stale ? ` · <span class="tag old">${esc(zh("stale"))}</span>` : ""}</span>
       ${r.missing.length ? `<span class="detail">${esc(zh("missing"))}：${esc(missingNames)}${esc(more)}</span>` : ""}
     </span>
     <span class="fig">
       <span class="a num">${esc(u.formatPence(r.pence, { alwaysPounds: true }))}</span>
       <span class="b num">${esc(twd(r.pence, { prefix: "≈ " }))}</span>
-      ${r.missing.length ? `<span class="b">不含缺項 <i class="en">partial</i></span>` : ""}
+      ${r.missing.length ? `<span class="b">不含缺項</span>` : ""}
     </span>
   </div>`;
 }
@@ -1911,9 +2091,7 @@ function renderHistory() {
                 <i class="en">${esc(u.formatUnitPrice(u.unitPricePence(price.price_pence, product), item.base_unit))}${esc(twd(price.price_pence))}</i></span>
             </button>`).join("")}
         </div>`).join("") : `<div class="empty"><div class="big">🧾</div>
-        <p>還沒有任何價格紀錄<br>No price records yet</p></div>`}
-      ${rows.length ? `<p class="note">點任何一筆可以修改或刪除
-        <i class="en">Tap any row to edit or delete it</i></p>` : ""}
+        <p>還沒有任何價格紀錄</p></div>`}
     </main>
     ${tabbar()}`;
 }
@@ -1923,18 +2101,19 @@ function renderHistory() {
 // 「這東西哪家便宜」是首頁在回答的。這一頁回答的是相反方向的問題：
 // **我人在 Aldi，這裡有什麼東西值得買？**
 //
-// 判斷「值得買」的標準是：在同一組裡它是不是最便宜的、便宜多少。
-// 跨組不比（見 stores.js 的分組理由），所以 Aldi 只跟其他一般超市比。
+// 判斷「值得買」的標準是：在所有有賣它的店裡是不是最便宜的、便宜多少。
+// 跟品項明細用同一套排行，兩頁的「最便宜」才不會互相矛盾。
 
 function storeReport(storeId) {
-  const group = storeGroup(storeId);
   const wins = [];
   const only = [];
   const loses = [];
   let newest = "";
 
   for (const item of state.items) {
-    const rank = rankItem(item.id).filter((r) => r.store.group === group);
+    // 跟品項明細同一套：所有有賣的店一起比。這裡如果還分組，
+    // 櫛瓜在品項明細說 Fulham Greens 最便宜、店家頁卻說 Baleys 贏，兩頁會打架。
+    const rank = rankItem(item.id);
     const mine = rank.find((r) => r.store.id === storeId);
     if (!mine) continue;
     if (mine.price.observed_on > newest) newest = mine.price.observed_on;
@@ -1980,9 +2159,9 @@ function storeCardHtml(store, report) {
   ].filter(Boolean).join(" · ");
 
   return `<button class="storecard${shown.length ? " has-wins" : ""}"
-      data-store-report="${esc(store.id)}" style="--c:${store.color}">
+      data-focus-store="${esc(store.id)}" style="--c:${store.color}">
     <span class="sc-head">
-      <span class="sc-name">${esc(store.name)}</span>
+      ${storeBadge(store)}<span class="sc-name">${esc(store.name)}</span>
       ${shown.length
         ? `<span class="sc-badge">${report.wins.length} 樣最便宜</span>`
         : `<span class="sc-badge muted">沒有最便宜的</span>`}
@@ -1990,20 +2169,19 @@ function storeCardHtml(store, report) {
 
     ${shown.length ? `<span class="sc-wins">${shown.map(winLine).join("")}</span>` : `
       <span class="sc-none">這裡的東西別家都更便宜，或還沒有對照組
-        <i class="en">Nothing here is the cheapest yet</i></span>`}
+</span>`}
 
     <span class="sc-foot">${esc(foot)}</span>
   </button>`;
 }
 
-function renderStores() {
-  // 只列出真的有紀錄的店 —— 空的卡片除了佔位置沒有任何用處
+// 有紀錄的店，照分組排：同組裡贏最多的在前。店家頁的總覽與上方切換列共用這個順序。
+function storesWithReports() {
   const reports = new Map();
   for (const st of allStores()) {
     const r = storeReport(st.id);
     if (r.total) reports.set(st.id, r);
   }
-
   const groups = GROUPS.map((g) => ({
     group: g,
     stores: allStores()
@@ -2011,38 +2189,127 @@ function renderStores() {
       .sort((a, b) => reports.get(b.id).wins.length - reports.get(a.id).wins.length
         || reports.get(b.id).total - reports.get(a.id).total),
   })).filter((g) => g.stores.length);
+  return { reports, groups };
+}
+
+// 店家頁有兩種狀態：
+//   總覽     —— 每家店最划算的幾樣攤在卡片上；一樣都沒贏的店縮成一行
+//   展開一家 —— 上方切換列點一家，就在同一頁攤開它的完整清單
+//
+// 為什麼不再開一層面板：站在店門口的情境是「我人在這家店」，一點就要看到，
+// 而且要能直接換到隔壁那家比。面板開了要關、關了再找，多一層就多一次分心。
+function renderStores() {
+  const { reports, groups } = storesWithReports();
+  const focus = state.storeFocus && reports.has(state.storeFocus) ? state.storeFocus : null;
+
+  // 切換店家的那一排放在底部、貼著選單列：單手拿手機時大拇指搆得到
+  const chips = groups.length ? `<div class="storebar storefocus" role="tablist">
+    <button class="chip${focus ? "" : " on"}" data-focus-store="" role="tab"
+      aria-selected="${!focus}">全部</button>
+    ${groups.flatMap(({ stores }) => stores).map((st) => `
+      <button class="chip${focus === st.id ? " on" : ""}" data-focus-store="${esc(st.id)}" role="tab"
+        aria-selected="${focus === st.id}">
+        ${storeBadge(st, "sm")}${esc(st.name)}</button>`).join("")}
+  </div>` : "";
+
+  const body = !groups.length ? `<div class="empty"><div class="big">🏬</div>
+      <p>還沒有任何價格紀錄<br>記幾筆之後，這裡會告訴你<br>每一家店有什麼東西最便宜</p></div>`
+    : focus ? storeDetailHtml(focus, reports.get(focus))
+    : storesOverviewHtml(groups, reports);
 
   return `
     ${topbar("storesTab")}
-    <main class="screen">
-      ${groups.length ? groups.map(({ group, stores }) => `
-        <div class="section-head"><h2>${group.icon} ${esc(group.zh)}
-          <i class="en">${esc(group.en)}</i></h2>
-          <span class="more num">${stores.length}</span></div>
-        <div class="storelist">
-          ${stores.map((st) => storeCardHtml(st, reports.get(st.id))).join("")}
-        </div>`).join("") : `<div class="empty"><div class="big">🏬</div>
-        <p>還沒有任何價格紀錄<br>Nothing recorded yet<br><br>
-        記幾筆之後，這裡會告訴你<br>每一家店有什麼東西最便宜<br>
-        <i class="en">Once you record a few prices, this shows what each store wins on</i></p></div>`}
-
-      ${groups.length ? `<p class="note">
-        卡片上直接列出<b>這家店最划算的前 ${CARD_WINS} 樣</b>（省最多的在最前面），
-        點卡片看完整清單。<br>
-        「省 N%」比的是<b>單價</b>，而且只跟<b>同一組</b>的店比 ——
-        Aldi 只跟其他一般超市比，不會拿去跟蔬果行比。<br>
-        <i class="en">Each card lists that store's best buys, ranked by how much you save.</i>
-      </p>` : ""}
-    </main>
+    <main class="screen${chips ? " has-dock" : ""}">${body}</main>
+    ${chips ? `<div class="storedock">${chips}</div>` : ""}
     ${tabbar()}`;
 }
 
+function storesOverviewHtml(groups, reports) {
+  return groups.map(({ group, stores }) => {
+    // 有贏的才值得一整張卡；一樣都沒贏的店，卡片上只會寫「沒有」，
+    // 佔一整塊只是讓你多滑幾下。縮成一行，要看再點。
+    const winners = stores.filter((st) => reports.get(st.id).wins.length);
+    const others = stores.filter((st) => !reports.get(st.id).wins.length);
+    return `
+      <div class="section-head"><h2>${group.icon} ${esc(group.zh)}
+</h2>
+        <span class="more num">${stores.length}</span></div>
+      ${winners.length ? `<div class="storelist">
+        ${winners.map((st) => storeCardHtml(st, reports.get(st.id))).join("")}</div>` : ""}
+      ${others.length ? `
+        <div class="storemini-head">${winners.length ? "其他店家 · " : ""}目前沒有最便宜的
+</div>
+        <div class="storemini-list">${others.map((st) => storeMiniHtml(st, reports.get(st.id))).join("")}</div>` : ""}`;
+  }).join("");
+}
+
+function storeMiniHtml(store, report) {
+  const fresh = report.newest ? u.freshness(report.newest) : null;
+  return `<button class="storemini" data-focus-store="${esc(store.id)}" style="--c:${store.color}">
+    ${storeBadge(store, "sm")}<span class="sm-name">${esc(store.name)}</span>
+    <span class="sm-meta">${report.total} 樣有紀錄${fresh ? " · " + esc(fresh.label) : ""}</span>
+    <span class="sm-go" aria-hidden="true">›</span>
+  </button>`;
+}
+
+// 「在這裡順手拍」：同組別家記過、這家還沒記的品項。
+//
+// 比價要成立，同一樣東西至少要有兩家的價格。正式資料裡 19 樣只有 5 樣做得到，
+// 另外 12 樣只在一家記過 —— 不是你不想比，是站在店裡的時候想不起來該拍什麼。
+// 所以直接列給你，點一下就開記價、品項和店家都帶好。
+//
+// 排序：目前只有一家有紀錄的排前面（補這一張就從「比不了」變成「比得了」），
+// 同樣條件再照最近碰過排。
+function snapCandidates(storeId) {
+  const group = storeGroup(storeId);
+  const recent = recentMap();
+  const out = [];
+  for (const item of state.items) {
+    const rank = rankItem(item.id);
+    if (rank.some((r) => r.store.id === storeId)) continue;
+    // 「這家可能有賣」用同組判斷（Aldi 不會有醬油）；顯示的家數與最低價用全部的排行，
+    // 跟品項明細講的一致
+    if (!rank.some((r) => r.store.group === group)) continue;
+    out.push({ item, best: rank[0], stores: rank.length, at: recent.get(item.id) || "" });
+  }
+  out.sort((a, b) => (a.stores === 1) !== (b.stores === 1) ? (a.stores === 1 ? -1 : 1)
+    : (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+  return out;
+}
+
+const SNAP_SHOWN = 8;
+
+function snapSectionHtml(storeId) {
+  const list = snapCandidates(storeId);
+  if (!list.length) return "";
+  const shown = list.slice(0, SNAP_SHOWN);
+  return `<div class="section-head"><h2>📸 在這裡順手拍
+</h2><span class="more num">${list.length}</span></div>
+    ${shown.map(({ item, best, stores }) => `
+      <button class="itemrow snaprow" data-snap="${esc(item.id)}" style="width:100%">
+        <span class="open" style="padding-left:18px">
+          <span class="ic">${itemEmoji(item)}</span>
+          <span class="body">
+            <span class="nm">${esc(item.name_zh || item.name_en)}
+              ${item.name_zh && item.name_en ? `<i class="en">${esc(item.name_en)}</i>` : ""}</span>
+            <span class="meta">${stores === 1
+              ? `只有 ${esc(best.store.name)} 記過，拍了就能比`
+              : `${stores} 家記過，最便宜 ${esc(best.store.name)}`}</span>
+          </span>
+          <span class="best">
+            <span class="up num">${esc(u.formatUnitPrice(best.unit, item.base_unit))}</span>
+            <span class="who"><span class="delta only">＋ 記價</span></span>
+          </span>
+        </span>
+      </button>`).join("")}
+    ${list.length > shown.length ? `<p class="note" style="padding-bottom:4px">還有 ${list.length - shown.length} 樣</p>` : ""}`;
+}
+
 // 一家店的明細：這裡買什麼划算、什麼別買。
-function openStoreReport(storeId) {
+function storeDetailHtml(storeId, r) {
   const store = storeById(storeId);
-  if (!store) return;
-  const r = storeReport(storeId);
   const g = groupById(store.group);
+  const fresh = r.newest ? u.freshness(r.newest) : null;
 
   const line = (row, kind) => {
     const item = row.item;
@@ -2069,40 +2336,46 @@ function openStoreReport(storeId) {
     </button>`;
   };
 
-  const el = sheet(`<span class="bi"><b>${esc(store.name)}</b><i>${g.icon} ${esc(g.zh)}</i></span>`, `
+  return `
+    <section class="storehead" style="--c:${store.color}">
+      <h2 class="sh-name">${storeBadge(store, "lg")}${esc(store.name)}</h2>
+      <p class="sh-meta">${g.icon} ${esc(g.zh)}${
+        fresh ? ` · 最近記價 ${esc(fresh.label)}` : ""}</p>
+    </section>
     <div class="scoreline" style="--c:${store.color}">
-      <div><span class="n num">${r.wins.length}</span><span class="l">最便宜<i class="en">cheapest</i></span></div>
-      <div><span class="n num">${r.only.length}</span><span class="l">獨有<i class="en">only here</i></span></div>
-      <div><span class="n num">${r.loses.length}</span><span class="l">較貴<i class="en">pricier</i></span></div>
+      <div><span class="n num">${r.wins.length}</span><span class="l">最便宜</span></div>
+      <div><span class="n num">${r.only.length}</span><span class="l">獨有</span></div>
+      <div><span class="n num">${r.loses.length}</span><span class="l">較貴</span></div>
     </div>
 
     ${r.wins.length ? `<div class="section-head"><h2>🥇 這裡買最划算
-      <i class="en">Best buys here</i></h2><span class="more num">${r.wins.length}</span></div>
+</h2><span class="more num">${r.wins.length}</span></div>
       ${r.wins.map((x) => line(x, "win")).join("")}` : ""}
 
+    ${snapSectionHtml(storeId)}
+
     ${r.only.length ? `<div class="section-head"><h2>🧭 只有這裡有紀錄
-      <i class="en">Only recorded here</i></h2><span class="more num">${r.only.length}</span></div>
+</h2><span class="more num">${r.only.length}</span></div>
       ${r.only.map((x) => line(x, "only")).join("")}` : ""}
 
     ${r.loses.length ? `<div class="section-head"><h2>💸 別在這裡買
-      <i class="en">Cheaper elsewhere</i></h2><span class="more num">${r.loses.length}</span></div>
+</h2><span class="more num">${r.loses.length}</span></div>
       ${r.loses.map((x) => line(x, "lose")).join("")}` : ""}
+`;
+}
 
-    <p class="note">
-      百分比比的是<b>單價</b>（每公斤／每公升），而且只跟<b>同一組</b>的店比 ——
-      ${esc(g.zh)}只跟${esc(g.zh)}比。<br>
-      「只有這裡有紀錄」不代表它便宜，只代表<b>沒有對照組</b>；
-      去別家記一筆同樣的東西就會知道了。<br>
-      <i class="en">Percentages compare unit prices within ${esc(g.en)} only.</i>
-    </p>
-  `);
-
-  el.querySelector(".sheet-body").addEventListener("click", (e) => {
-    const row = e.target.closest("[data-item]");
-    if (!row) return;
-    closeSheet(el);
-    openItemDetail(row.dataset.item);
-  });
+// 展開／收起某一家。第一次展開推一筆瀏覽紀錄，安卓的返回鍵才會回到總覽；
+// 在店家之間切換不再推，不然看了五家要按五次返回。
+function focusStore(id) {
+  if (!id) {
+    if (state.storeFocus) history.back();   // popstate 會負責清掉並重繪
+    return;
+  }
+  if (!state.storeFocus) history.pushState({ storeFocus: true }, "");
+  state.storeFocus = id;
+  render();
+  window.scrollTo(0, 0);
+  app.querySelector(".storefocus .chip.on")?.scrollIntoView({ inline: "center", block: "nearest" });
 }
 
 function renderSettings() {
@@ -2112,15 +2385,15 @@ function renderSettings() {
   return `
     ${topbar("settings")}
     <main class="screen">
-      <div class="section-head"><h2>同步 <i class="en">Sync</i></h2></div>
+      <div class="section-head"><h2>同步</h2></div>
       <div class="rows">
-        <div class="row"><span class="k">狀態 <i class="en">Status</i></span><span class="v">${syncBadge()}</span></div>
-        <div class="row"><span class="k">上次同步 <i class="en">Last sync</i></span><span class="v num">${esc(lastSync)}</span></div>
+        <div class="row"><span class="k">狀態</span><span class="v">${syncBadge()}</span></div>
+        <div class="row"><span class="k">上次同步</span><span class="v num">${esc(lastSync)}</span></div>
         <button class="row" data-act="sync"><span class="k">${bi1("syncNow")}</span><span class="v">›</span></button>
-        <div class="row"><span class="k">待上傳照片 <i class="en">Photos queued</i></span><span class="v num" data-pending>—</span></div>
+        <div class="row"><span class="k">待上傳照片</span><span class="v num" data-pending>—</span></div>
       </div>
 
-      <div class="section-head"><h2>照片 <i class="en">Photos</i></h2></div>
+      <div class="section-head"><h2>照片</h2></div>
       <div class="rows">
         <button class="row" data-act="batch"><span class="k">${bi1("batch")}</span>
           <span class="v">一次選多張，逐張確認 ›</span></button>
@@ -2128,24 +2401,24 @@ function renderSettings() {
           <button class="row" data-act="resume-batch">
             <span class="k" style="color:var(--accent-ink)">${bi1("resume")}</span>
             <span class="v">還剩 ${queue.ids.length - queue.index} 張 ›</span></button>
-          <button class="row danger" data-act="drop-batch"><span class="k">放棄這批 Discard batch</span></button>` : ""}
+          <button class="row danger" data-act="drop-batch"><span class="k">放棄這批</span></button>` : ""}
       </div>
 
-      <div class="section-head"><h2>品項 <i class="en">Items</i></h2></div>
+      <div class="section-head"><h2>品項</h2></div>
       <div class="rows">
         <button class="row" data-act="tidy">
           <span class="k">✨ ${bi1("tidy")}</span>
           <span class="v">用名稱重新判斷 ›</span></button>
       </div>
 
-      <div class="section-head"><h2>${esc(zh("stores"))} <i class="en">${esc(en("stores"))}</i></h2></div>
+      <div class="section-head"><h2>${esc(zh("stores"))}</h2></div>
       <div class="rows">
         <button class="row" data-act="stores">
           <span class="k">🏪 ${bi1("stores")}</span>
           <span class="v">自訂 ${customStores().length} 家 ›</span></button>
       </div>
 
-      <div class="section-head"><h2>台幣 <i class="en">TWD</i></h2></div>
+      <div class="section-head"><h2>台幣</h2></div>
       <div class="rows">
         <label class="row">
           <span class="k">${bi1("showTwd")}</span>
@@ -2154,13 +2427,8 @@ function renderSettings() {
         <div class="row"><span class="k">${bi1("rate")}</span>
           <span class="v num" data-rate>—</span></div>
       </div>
-      <p class="note">
-        台幣是<b>參考值</b>，用今天的匯率換算，只是讓你對得上物價感覺 ——
-        它不參與任何排序或加總，比價的真相永遠是英鎊那一欄。<br>
-        <i class="en">TWD is indicative only and never affects ranking.</i>
-      </p>
 
-      <div class="section-head"><h2>匯出 <i class="en">Export</i></h2></div>
+      <div class="section-head"><h2>匯出</h2></div>
       <div class="rows">
         <button class="row" data-act="export-xlsx">
           <span class="k">📊 ${bi1("exportXlsx")}</span>
@@ -2169,36 +2437,25 @@ function renderSettings() {
           <span class="k">📄 ${bi1("exportCsv")}</span>
           <span class="v">價格流水帳 ›</span></button>
       </div>
-      <p class="note">
-        Excel 檔有三張表：<b>比價總表</b>（一個品項一列、每家店一欄）、
-        <b>價格紀錄</b>（每一筆觀測的流水帳）、<b>品項</b>。
-        CSV 只有價格紀錄那一張。<br>
-        <i class="en">CSV is UTF-8 with BOM so Excel opens Chinese correctly.</i>
-      </p>
 
-      <div class="section-head"><h2>標籤辨識 <i class="en">Label recognition</i></h2></div>
+      <div class="section-head"><h2>標籤辨識</h2></div>
       <div class="rows">
         <div class="row"><span class="k">${bi1("model")}</span><span class="v num" data-model style="font-size:12px">—</span></div>
         <button class="row" data-act="bakeoff"><span class="k">${bi1("bakeoff")}</span>
           <span class="v">拿一張照片比三個模型 ›</span></button>
       </div>
-      <p class="note">
-        目前用 Cloudflare Workers AI（免費額度每天 10,000 Neurons）。
-        辨識結果一律要你確認過才會存 —— 錯的價格比沒有價格更糟。<br>
-        <i class="en">AI suggestions always go through your confirmation. A wrong price is worse than no price.</i>
-      </p>
 
-      <div class="section-head"><h2>本機 <i class="en">This device</i></h2></div>
+      <div class="section-head"><h2>本機</h2></div>
       <div class="rows">
-        <div class="row"><span class="k">照片快取 <i class="en">Photo cache</i></span><span class="v num" data-bytes>—</span></div>
+        <div class="row"><span class="k">照片快取</span><span class="v num" data-bytes>—</span></div>
         <button class="row" data-act="clear-photos"><span class="k">${bi1("clearCache")}</span>
           <span class="v">已上傳的才會刪 ›</span></button>
         <label class="row">
           <span class="k">${bi1("theme")}</span>
           <select class="sel" data-act="theme">
-            <option value="auto">跟隨系統 Auto</option>
-            <option value="light">淺色 Light</option>
-            <option value="dark">深色 Dark</option>
+            <option value="auto">跟隨系統</option>
+            <option value="light">淺色</option>
+            <option value="dark">深色</option>
           </select>
         </label>
       </div>
@@ -2209,7 +2466,6 @@ function renderSettings() {
 
       <p class="note">
         ${esc(state.items.length)} 個品項 · ${esc(state.products.length)} 筆商品 · ${esc(state.prices.length)} 筆價格<br>
-        <i class="en">${esc(state.items.length)} items · ${esc(state.products.length)} products · ${esc(state.prices.length)} price observations</i>
       </p>
     </main>
     ${tabbar()}`;
@@ -2223,14 +2479,14 @@ async function openBakeOff() {
   const el = sheet(bi("bakeoff"), `
     <div class="photo-slot" data-photo>
       <button class="photo-drop" data-act="pick-photo">
-        <span style="font-size:22px">📷</span><span>選一張貨架標籤 Pick a shelf label</span>
+        <span style="font-size:22px">📷</span><span>選一張貨架標籤</span>
       </button>
     </div>
     <div data-results></div>
     <p class="note">
       同一張照片同時丟給三個 Workers AI 視覺模型，把它們讀出來的東西並排給你看。<br>
       對照實際標籤，看哪一個抓得準，再決定 App 預設用哪個 —— 或決定乾脆放棄 AI 只留手動輸入。<br>
-      <i class="en">Runs one photo through all three candidate models so you can judge accuracy yourself.</i>
+
     </p>`);
 
   el.querySelector("[data-photo]").onclick = async (e) => {
@@ -2245,7 +2501,7 @@ async function openBakeOff() {
     const url = URL.createObjectURL(blob);
 
     slot.innerHTML = `<img src="${url}" alt="" style="width:100%;border-radius:var(--r);border:1px solid var(--line)">`;
-    results.innerHTML = `<div class="empty"><p>三個模型跑中…<br>Running three models…</p></div>`;
+    results.innerHTML = `<div class="empty"><p>三個模型跑中…</p></div>`;
 
     try {
       const res = await fetch("/api/extract/bakeoff", {
@@ -2266,12 +2522,12 @@ function bakeOffHtml(results) {
   return Object.entries(results).map(([name, r]) => {
     const d = r.data;
     const body = r.ok && d ? `
-      <div class="row"><span class="k">名稱 <i class="en">Name</i></span><span class="v">${esc(d.name_en ?? "—")}</span></div>
-      <div class="row"><span class="k">品牌 <i class="en">Brand</i></span><span class="v">${esc(d.brand ?? "自有品牌 own label")}</span></div>
-      <div class="row"><span class="k">容量 <i class="en">Size</i></span><span class="v num">${esc(u.formatSize(d.size, d.size_unit) || "—")}</span></div>
-      <div class="row"><span class="k">價格 <i class="en">Price</i></span><span class="v num" style="color:var(--accent-ink);font-weight:650">${esc(u.formatPence(d.price_pence, { alwaysPounds: true }))}</span></div>
-      <div class="row"><span class="k">標籤單價 <i class="en">Unit price</i></span><span class="v num">${esc(d.label_unit_price ?? "—")}</span></div>
-      <div class="row"><span class="k">特價 <i class="en">Promo</i></span><span class="v">${d.is_promo ? esc(d.promo_note || "是 yes") : "—"}</span></div>`
+      <div class="row"><span class="k">名稱</span><span class="v">${esc(d.name_en ?? "—")}</span></div>
+      <div class="row"><span class="k">品牌</span><span class="v">${esc(d.brand ?? "自有品牌 own label")}</span></div>
+      <div class="row"><span class="k">容量</span><span class="v num">${esc(u.formatSize(d.size, d.size_unit) || "—")}</span></div>
+      <div class="row"><span class="k">價格</span><span class="v num" style="color:var(--accent-ink);font-weight:650">${esc(u.formatPence(d.price_pence, { alwaysPounds: true }))}</span></div>
+      <div class="row"><span class="k">標籤單價</span><span class="v num">${esc(d.label_unit_price ?? "—")}</span></div>
+      <div class="row"><span class="k">特價</span><span class="v">${d.is_promo ? esc(d.promo_note || "是 yes") : "—"}</span></div>`
       : `<div class="row"><span class="k" style="color:var(--danger)">${esc(r.error || "失敗")}</span></div>
          ${r.raw ? `<div class="row block"><span class="k" style="font-size:12px;color:var(--faint);word-break:break-all">${esc(r.raw)}</span></div>` : ""}`;
 
@@ -2353,26 +2609,37 @@ async function fillSettingsAsync() {
   }
 }
 
+// iPhone 的 Safari 沒有任何 touchstart 監聽時，:active 樣式不會出現 ——
+// 按下去完全沒回饋，安卓則正常。掛一個空的就好。
+document.addEventListener("touchstart", () => {}, { passive: true });
+
 // 全域委派。畫面重繪很頻繁，每次都重綁事件太容易漏。
 document.addEventListener("click", async (e) => {
   const routeBtn = e.target.closest("[data-route]");
   if (routeBtn) {
-    state.route = routeBtn.dataset.route;
-    state.query = "";
+    goRoute(routeBtn.dataset.route);
+    return;
+  }
+
+  const sortBtn = e.target.closest("[data-home-sort]");
+  if (sortBtn) {
+    state.homeSort = sortBtn.dataset.homeSort;
+    state.homeOrder = null;
+    db.setMeta("home_sort", state.homeSort);
     render();
     return;
   }
 
   const act = e.target.closest("[data-act]")?.dataset.act;
 
-  if (act === "add") { openRecord(); return; }
+  if (act === "add") { openRecordMenu(); return; }
   if (act === "batch") { openBatchImport(); return; }
   if (act === "resume-batch") { nextInQueue(); return; }
   if (act === "drop-batch") {
     // 照片本身留著（在 photos 表裡），只是不再逐張問你。要用隨時可以再挑。
     await clearQueue();
     render();
-    toast("已放棄這批，照片還在本機 Batch dropped, photos kept");
+    toast("已放棄這批，照片還在本機");
     return;
   }
   if (act === "new-item") { openItemEditor(null, () => refresh()); return; }
@@ -2382,13 +2649,17 @@ document.addEventListener("click", async (e) => {
   if (act === "stores") { openStoreList(); return; }
   if (act === "tidy") { openTidy(); return; }
 
-  const report = e.target.closest("[data-store-report]");
-  if (report) { openStoreReport(report.dataset.storeReport); return; }
+  // 順手拍：品項跟店家都帶好，直接開記價
+  const snap = e.target.closest("[data-snap]");
+  if (snap && app.contains(snap)) { openRecord({ itemId: snap.dataset.snap, storeId: state.storeFocus }); return; }
+
+  const focus = e.target.closest("[data-focus-store]");
+  if (focus && app.contains(focus)) { focusStore(focus.dataset.focusStore); return; }
   if (act === "clear-basket") { await clearSelected(); return; }
-  if (act === "sync") { await db.sync(); render(); toast("同步完成 Synced"); return; }
+  if (act === "sync") { await db.sync(); render(); toast("同步完成"); return; }
 
   if (act === "export-xlsx" || act === "export-csv") {
-    if (!state.prices.length) return toast("還沒有資料可以匯出 Nothing to export yet", { warn: true });
+    if (!state.prices.length) return toast("還沒有資料可以匯出", { warn: true });
 
     // 比價邏輯用傳的，不要在 export.js 裡重寫一份 ——
     // 匯出的數字跟畫面上不一樣是最難發現的 bug
@@ -2397,11 +2668,11 @@ document.addEventListener("click", async (e) => {
 
     if (act === "export-xlsx") {
       xport.download(xport.xlsxBlob(all), `price-check-${xport.stamp()}.xlsx`);
-      toast(`已匯出 ${all.length} 張工作表 Exported`);
+      toast(`已匯出 ${all.length} 張工作表`);
     } else {
       const prices = all.find((s) => s.name.startsWith("價格紀錄"));
       xport.download(xport.csvBlob(prices), `price-check-${xport.stamp()}.csv`);
-      toast(`已匯出 ${prices.rows.length} 筆價格 Exported`);
+      toast(`已匯出 ${prices.rows.length} 筆價格`);
     }
     return;
   }
@@ -2419,9 +2690,6 @@ document.addEventListener("click", async (e) => {
     return;
   }
 
-  const pick = e.target.closest("[data-pick]");
-  if (pick && app.contains(pick)) { await toggleSelected(pick.dataset.pick); return; }
-
   // 紀錄頁的每一列直接開編輯（品項明細裡的那些由面板自己處理）
   const priceRow = e.target.closest("[data-price-id]");
   if (priceRow && app.contains(priceRow)) { openRecord({ editPriceId: priceRow.dataset.priceId }); return; }
@@ -2431,7 +2699,7 @@ document.addEventListener("click", async (e) => {
     const li = state.list_items.find((r) => r.id === remove.dataset.remove);
     await db.remove("list_items", remove.dataset.remove);
     await refresh();
-    toast("已從清單移除 Removed", {
+    toast("已從清單移除", {
       action: async () => { await db.put("list_items", { ...li, deleted_at: null }); await refresh(); },
     });
     return;
@@ -2473,7 +2741,7 @@ function renderLogin(message = "") {
     <div class="login">
       <div class="mark">🛒</div>
       <h1>${bi("app")}</h1>
-      <p>英國超市比價<br><i class="en">UK supermarket price tracker</i></p>
+      <p>英國超市比價<br></p>
       <input type="password" data-pw placeholder="${plain("password")}" autocomplete="current-password">
       <p class="err" data-err>${esc(message)}</p>
       <button data-go>${bi1("login")}</button>
@@ -2517,6 +2785,7 @@ async function start() {
   await db.setMeta("signed_in", 1);
   state.lastStore = await db.getMeta("last_store", "sainsburys");
   state.showTwd = (await db.getMeta("show_twd", 1)) ? true : false;
+  state.homeSort = await db.getMeta("home_sort", "cat");
 
   // 先用上次快取的匯率把畫面畫出來，不要等網路。
   // 同步回來如果有新的，db.js 會寫回 meta，下面那個 onChange 再更新。
@@ -2545,7 +2814,7 @@ async function boot() {
   if (theme && theme !== "auto") document.documentElement.setAttribute("data-theme", theme);
 
   db.onChange((detail) => {
-    if (detail.type === "unauthed") { renderLogin("請重新登入 Please sign in again"); return; }
+    if (detail.type === "unauthed") { renderLogin("請重新登入"); return; }
     if (!state.ready) return;
     // 背景同步完成剛好撞上你正在打字時，重繪會把游標吃掉。搜尋框有焦點就先不畫。
     if (document.activeElement?.matches?.("[data-q], .sheet input, .sheet select")) return;

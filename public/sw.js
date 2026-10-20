@@ -9,7 +9,7 @@
 // 超市裡最麻煩的不是完全沒網路，而是連得上卻慢得要命。網路優先會讓開啟 App
 // 卡在等逾時；反正資料在 IndexedDB，shell 拿舊的也無所謂。
 
-const VERSION = "v10";
+const VERSION = "v15";
 const CACHE = "pc-shell-" + VERSION;
 
 // 注意：不要放 "/index.html"。
@@ -23,6 +23,7 @@ const SHELL = [
   "/units.js",
   "/stores.js",
   "/emoji.js",
+  "/presets.js",
   "/export.js",
   "/fx.js",
   "/i18n.js",
@@ -30,6 +31,18 @@ const SHELL = [
   "/icons/icon.svg",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
+  "/logos/aldi.png",
+  "/logos/asda.png",
+  "/logos/coop.png",
+  "/logos/iceland.png",
+  "/logos/lidl.svg",
+  "/logos/morrisons.png",
+  "/logos/ms.png",
+  "/logos/ocado.png",
+  "/logos/tesco.png",
+  "/logos/waitrose.png",
+  "/logos/starrymart.png",
+  "/logos/oseyo.svg",
 ];
 
 self.addEventListener("install", (event) => {

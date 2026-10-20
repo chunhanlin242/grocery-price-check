@@ -37,6 +37,20 @@ export const baseOfUnit = (unit) => (TO_BASE[unit] || TO_BASE.g).base;
 export const displayUnitEn = (base) => (DISPLAY[base] || DISPLAY.g).en;
 export const displayUnitZh = (base) => (DISPLAY[base] || DISPLAY.g).zh;
 
+// 從標籤上印的單價小字看出計價基準：「48.3p each」→ each、「£0.58 per 100ml」→ ml、
+// 「£3.99/kg」→ g。看不出來回 null。
+//
+// 標籤是店家印的，它說按個賣就是按個賣 —— 比使用者建品項時隨手留的預設值可靠。
+// 正式資料裡蛋、蘋果、醬油全被存成「每克」，標籤小字其實早就寫對了。
+export function baseFromLabel(text) {
+  const s = String(text || "").toLowerCase();
+  if (!s) return null;
+  if (/each|per\s*unit|\/\s*unit|per\s*item|\bea\b/.test(s)) return "each";
+  if (/ml|\d\s*cl\b|\bcl\b|litre|liter|ltr|(per|\/)\s*l\b/.test(s)) return "ml";
+  if (/kg|\d\s*g\b|(per|\/)\s*g\b|gram/.test(s)) return "g";
+  return null;
+}
+
 // 把「500 g」「2 l」換算成基準單位的數量
 export function toBase(size, unit) {
   const n = Number(size);
@@ -101,14 +115,15 @@ export function formatUnitPrice(pencePerBase, base) {
     ? `${perDisplay < 10 ? perDisplay.toFixed(1) : Math.round(perDisplay)}p`
     : `£${(perDisplay / 100).toFixed(2)}`;
 
-  return `${money}/${d.en}`;
+  // kg、L 是標籤上印的樣子；「each」換成「個」，介面只用中文
+  return `${money}/${base === "each" ? "個" : d.en}`;
 }
 
 // "2L" / "500g" / "1 個"
 export function formatSize(size, unit) {
   const n = Number(size);
   if (!Number.isFinite(n) || n <= 0) return "";
-  if (unit === "each") return n === 1 ? "1 個 each" : `${n} 個 each`;
+  if (unit === "each") return `${n} 個`;
   const label = { g: "g", kg: "kg", ml: "ml", l: "L" }[unit] || unit;
   const num = Number.isInteger(n) ? String(n) : String(Number(n.toFixed(3)));
   return num + label;
@@ -131,14 +146,19 @@ export function daysAgo(dateStr) {
   return Math.round((now - then) / 86400000);
 }
 
-// 價格會過期。英國食品價格變動很快，拿三個月前的數字比價等於瞎猜，
-// 所以每一個價格旁邊都要講清楚它多老。
-export const STALE_DAYS = 30;
+// 價格會過期，但一般架上價格跟促銷價過期的速度差很多。
+//
+// 原本一律 30 天，結果記價一個月後首頁每一列都標「舊」，標記就沒有意義了 ——
+// 超市的一般價格不會每個月變。真正很快失效的是促銷：Nectar 價、黃標、
+// 限時優惠通常一兩週就結束，拿它當現價比，那家店會看起來便宜得不實在。
+export const STALE_DAYS = 90;
+export const PROMO_STALE_DAYS = 14;
 
-export function freshness(dateStr) {
+export function freshness(dateStr, { promo = false } = {}) {
   const d = daysAgo(dateStr);
   if (d === null) return { days: null, label: "", stale: true };
-  if (d <= 0) return { days: 0, label: "今天 today", stale: false };
-  if (d === 1) return { days: 1, label: "昨天 yesterday", stale: false };
-  return { days: d, label: `${d} 天前 ${d}d ago`, stale: d > STALE_DAYS };
+  const limit = promo ? PROMO_STALE_DAYS : STALE_DAYS;
+  if (d <= 0) return { days: 0, label: "今天", stale: false };
+  if (d === 1) return { days: 1, label: "昨天", stale: false };
+  return { days: d, label: `${d} 天前`, stale: d > limit };
 }

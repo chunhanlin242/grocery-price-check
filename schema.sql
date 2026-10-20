@@ -142,6 +142,24 @@ CREATE TABLE IF NOT EXISTS stores (
 );
 CREATE INDEX IF NOT EXISTS idx_stores_seq ON stores(server_seq);
 
+-- 最近看過哪個品項。首頁照「最近碰過」排序：看過、新建、剛記價，取最新的那個。
+--
+-- id 直接用 item_id，一個品項只有一列。手機看過、電腦又看過，兩邊寫的是同一列，
+-- last-write-wins 剛好就是「最後一次看」，不用另外合併。
+--
+-- 為什麼不是 items 加一欄 viewed_at：看一眼就會改到 items 那一列的 updated_at，
+-- 手機離線看過一次、電腦同時改了品名，手機一推上去就用舊品名把新的蓋掉。
+-- 分開一張表，「看」永遠碰不到品項本身。
+CREATE TABLE IF NOT EXISTS item_views (
+  id         TEXT PRIMARY KEY,            -- = items.id
+  viewed_at  TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT,
+  server_seq INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_item_views_seq ON item_views(server_seq);
+
 -- 匯率快取。只需要 GBP→TWD 一組，但沿用 travel-money 的表結構，
 -- 之後要加歐元之類的不用改 schema。
 --
